@@ -55,8 +55,14 @@ def main(argv=None):
     ap.add_argument("--wrist-out", default="/tmp/grip_features.jsonl")
     ap.add_argument("--true-xy", action="store_true", help="grasp at the TRUE object xy (sim state) instead of the "
                     "perceived one; shape, axes and colour stay perceived. Answers: are misses position errors?")
+    ap.add_argument("--ov", action="append", default=[], help="config override key=JSON, e.g. "
+                    "grasp.point_in_palm=[0.099,-0.084,0.0] (repeatable)")
     a = ap.parse_args(argv)
     ov = {}
+    import json as _json
+    for kv in a.ov:
+        k, v = kv.split("=", 1)
+        ov[k] = _json.loads(v)
     if a.closed:
         ov["hand.closed"] = [float(x) for x in a.closed.split(",")]
     if a.acc:
