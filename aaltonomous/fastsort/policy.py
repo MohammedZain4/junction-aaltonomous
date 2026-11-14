@@ -184,7 +184,12 @@ class FastSortPolicy:
         self.failed = []            # xy that could not be planned
         self.events = []
         self._halt = False
-        self._note(0.0, f"instruction -> {self.rules.summary()}  [{self.rules.instruction!r}]")
+        # AALTO_RT_EMULATE=<rtf> (testing only): charge the brain's wall time (looks, planning incl. failed plans) to
+        # the sim clock as if the sim ran at that real-time factor (1.0 = real robot). The scored 120 s run on the sim
+        # clock, and a sim at RTF 0.15 otherwise hides ~85% of planning time. New plans never start before vtick.
+        self.rt_emulate = float(os.environ.get("AALTO_RT_EMULATE", "0") or 0)
+        self.vtick = 0.0
+        self._note(0.0, f"instruction ->{self.rules.summary()}  [{self.rules.instruction!r}]")
 
     def stop_brain(self):
         self._halt = True
@@ -350,7 +355,19 @@ class FastSortPolicy:
                               f" -> {est['cost'] * 1000:.1f} mm, inliers {est['inliers']:.2f}: "
                               + ("applied" if good else "NOT applied"))
 
+    def _charge(self, tick0, wall0):
+        """Real-time emulation: the brain was busy from tick0 for (now - wall0) wall seconds."""
+        if self.rt_emulate > 0:
+            self.vtick = max(self.vtick, tick0) + (time.monotonic() - wall0) * HZ * self.rt_emulate
+
     def _look(self, obs, now):
+        tick0, wall0 = self.tick, time.monotonic()
+        try:
+            self._look_inner(obs, now)
+        finally:
+            self._charge(tick0, wall0)
+
+    def _look_inner(self, obs, now):
         if self.pool is None:
             self._self_calibrate(obs["head_depth"])
         dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
@@ -432,6 +449,17 @@ class FastSortPolicy:
         arm_q[sl], hand_q[sl] = sa, sh
 
         t0 = time.monotonic()
+        try:
+            plan = self._make_plan(lane, obj, side, arm_q, hand_q)
+        finally:
+            self._charge(now, t0)
+        if plan is None:
+            return False
+        dt_plan = time.monotonic() - t0
+        return self._commit(lane, obj, plan, side, sl, sa, sh, use_chain, arm_q, hand_q, dt_plan)
+
+    def _make_plan(self, lane, obj, side, arm_q, hand_q):
+        """The plan for obj with this arm, or None (failure already recorded / handed to the other arm)."""
         if not obj.reloc and obj.bin not in ("center", side):
             # cross-body carry (left arm -> right bin or vice versa): 0 successes in 26 tries over 7 eval runs, each
             # failure cost 2.5-4 s of planning. Go straight to the hand-off.
@@ -440,18 +468,19 @@ class FastSortPolicy:
             plan = self.planner._plan_side_hints(obj.det, side, obj.bin, arm_q, hand_q)
             if not plan.ok:
                 self._side_failed(obj, side, f"no plan: {plan.reason}")
-                return False
+                return None
         else:
             obstacles = [o.xy for o in self.pool if o is not obj]
             plan = self.planner.plan_relocation(obj.det, obj.bin, arm_q, hand_q, obstacles)
             if plan.ok and plan.side != side:  # the relocation needs the other arm: hand it over
                 obj.pref = plan.side
-                return False
+                return None
             if not plan.ok:
                 self._side_failed(obj, side, f"no relocation: {plan.reason}")
-                return False
-        dt_plan = time.monotonic() - t0
+                return None
+        return plan
 
+    def _commit(self, lane, obj, plan, side, sl, sa, sh, use_chain, arm_q, hand_q, dt_plan):
         A, H = plan.arm[:, sl], plan.hand[:, sl]
         home_start = next((s for name, s, e in plan.phases if name == "home"), None)
         P = self._lane_points(side, A, H)
@@ -476,7 +505,9 @@ class FastSortPolicy:
                 other_ver, other_parked = other.version, not len(other.qa)
             # search past the other arm's whole queued timeline: with a 8 s cap a chained other arm (pick + next pick
             # > 8 s) made this arm replan every 0.5 s for up to 8.5 s of sim time (17 "later"s in one DR episode)
-            d, closest = self._find_delay(cut0, hold_pts, P, O, O_last, max_delay=max(240, len(O) - cut0 + 30))
+            d0 = max(0, int(np.ceil(self.vtick - (now0 + cut0)))) if self.rt_emulate > 0 else 0
+            d, closest = self._find_delay(cut0, hold_pts, P, O, O_last, max_delay=max(240, len(O) - cut0 + 30) + d0,
+                                          d_min=d0)
             self.lock.acquire()
             now = self.tick
             cut = cut0 - (now - now0)  # same absolute start tick as searched
@@ -527,14 +558,14 @@ class FastSortPolicy:
                               f"{'chained' if use_chain else 'from tail'}), {len(A) / HZ:.1f}s, planned in {dt_plan:.2f}s")
         return True
 
-    def _find_delay(self, cut, hold_pts, P, O, O_last, max_delay=240, step=3):
+    def _find_delay(self, cut, hold_pts, P, O, O_last, max_delay=240, step=3, d_min=0):
         """Smallest d (ticks) such that [hold d ticks] + P, starting `cut` ticks from now, keeps every point >=
         min_arm_dist from the other arm's timeline O (then its final pose O_last). None if no d <= max_delay."""
         """Returns (d or None, closest) with closest = (distance, my point index, their point index) at d = 0."""
         dmin = self.min_arm_dist
         n_o = len(O)
         closest = None
-        for d in range(0, max_delay + 1, step):
+        for d in range(d_min, max_delay + 1, step):
             L = d + len(P)
             idx = cut + np.arange(0, L, 2)
             mine = np.where((np.arange(0, L, 2) < d)[:, None, None], hold_pts[None],
