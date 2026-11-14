@@ -1,5 +1,10 @@
 # Aaltonomous Humanoid — Junction 2026
 
+> **Our entry: [FastSort](aaltonomous/fastsort/README.md).** A dual-arm, instruction-aware sorter: both arms
+> working at once with full-arm collision checks, free-form multilingual instructions, shape-aware grasps,
+> self-calibration from the bins, colour detection tuned on the real Drop 2 footage, and wrist-camera grip checks.
+> The rest of this README is the organisers' starter-kit documentation.
+
 Starter code for the **Aaltonomous Humanoid** challenge: make Väiski, a Unitree G1 with two Dex3 hands, sort
 coloured objects into bins fully autonomously. Develop in sim, hand in a Docker policy server, the best teams run on
 the real robot in the finals.
