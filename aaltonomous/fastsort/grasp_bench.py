@@ -53,6 +53,8 @@ def main(argv=None):
     ap.add_argument("--wrist", action="store_true", help="log grip-check features (joints + wrist cam) per pick, "
                     "labelled by the scene scorer; one JSON line per pick in --wrist-out")
     ap.add_argument("--wrist-out", default="/tmp/grip_features.jsonl")
+    ap.add_argument("--true-xy", action="store_true", help="grasp at the TRUE object xy (sim state) instead of the "
+                    "perceived one; shape, axes and colour stay perceived. Answers: are misses position errors?")
     a = ap.parse_args(argv)
     ov = {}
     if a.closed:
@@ -85,6 +87,16 @@ def main(argv=None):
         obs, why = run(env, A, Hh)
         cur_a, cur_h = A[-1].copy(), Hh[-1].copy()
         dets = per.detect(obs["head_rgb"], obs["head_depth"])
+        if a.true_xy:
+            truth = [np.asarray(o["pos"], float) for o in sc.state()["objects"] if o["active"]]
+            errs = []
+            for d in dets:
+                if truth:
+                    t = min(truth, key=lambda p: np.linalg.norm(p[:2] - d.top[:2]))
+                    if np.linalg.norm(t[:2] - d.top[:2]) < 0.05:
+                        errs.append(1000 * np.linalg.norm(t[:2] - d.top[:2]))
+                        d.top = np.r_[t[:2], d.top[2]]
+            print(f"  seed {s}: true xy used, perceived error {np.round(errs, 1).tolist()} mm")
         tried = 0
         for d in sorted(dets, key=lambda d: np.linalg.norm(d.top[:2] - pl.drop_xy(FIXED_MAPPING[d.color]))):
             b = FIXED_MAPPING[d.color]
