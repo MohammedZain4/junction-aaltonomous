@@ -101,6 +101,7 @@ class Lane:
         self.chain_a = self.chain_h = self.chain_pts = None
         self.plans: list[LanePlan] = []
         self.idle_since = 0         # absolute tick at which the queue last ran empty
+        self.version = 0            # +1 on every commit (the other lane re-validates its delay search against it)
 
     def tail(self):
         if len(self.qa):
@@ -113,7 +114,7 @@ class Lane:
 
 class FastSortPolicy:
     def __init__(self, config=None, scene=None, calibration=None, time_limit=120.0, log=print, overrides=None,
-                 min_arm_dist=0.11):
+                 min_arm_dist=0.075):  # between link origins (palm, finger links, wrist, elbow), not surfaces
         ov = dict(FAST_OVERRIDES) if os.environ.get("AALTO_FAST", "1") != "0" else {}
         ov.update(overrides or {})
         self.cfg = config if isinstance(config, dict) else load_config(config, ov)
@@ -218,7 +219,12 @@ class FastSortPolicy:
             qh = np.vstack([h[:, lane.sl], np.repeat(self.post["open"][lane.sl][None], n_settle, 0)]) if len(h) else \
                 np.repeat(lane.cmd_h[None], n_settle, 0)
             lane.qa, lane.qh = qa, qh
-            lane.pts = self._lane_points(lane.side, qa, qh)
+            # The first act() must answer fast (the watchdog stops the episode after 1 s without a target): FK on a
+            # handful of samples of the initial move, repeated, instead of every tick.
+            ks = np.unique(np.linspace(0, len(qa) - 1, min(len(qa), 6)).round().astype(int))
+            sp_pts = self._lane_points(lane.side, qa[ks], qh[ks])
+            nearest = np.abs(np.arange(len(qa))[:, None] - ks[None]).argmin(axis=1)
+            lane.pts = sp_pts[nearest]
         self.started = True
         self._halt = False
         self._brain_thread = threading.Thread(target=self._brain, daemon=True)
@@ -397,22 +403,34 @@ class FastSortPolicy:
         P = self._lane_points(side, A, H)
         hold_pts = self._points(side, arm_q, hand_q)
 
-        with self.lock:
+        other = self.lanes["right" if side == "left" else "left"]
+        for _attempt in range(5):
+            # snapshot under the lock, search the delay WITHOUT it (act() must never wait on this), re-validate
+            with self.lock:
+                now0 = self.tick
+                if use_chain:
+                    if lane.chain_abs is None or lane.chain_abs - now0 < 1:
+                        return False  # the home move already started: replan from the new tail
+                    cut0 = lane.chain_abs - now0
+                else:
+                    ta, th, _ = lane.tail()
+                    if not (np.allclose(ta, sa) and np.allclose(th, sh)):
+                        return False
+                    cut0 = len(lane.qa)
+                O = other.pts if len(other.qa) else np.empty((0,) + other.cmd_pts.shape)
+                O_last = other.pts[-1] if len(other.qa) else other.cmd_pts
+                other_ver, other_parked = other.version, not len(other.qa)
+            d, closest = self._find_delay(cut0, hold_pts, P, O, O_last)
+            self.lock.acquire()
             now = self.tick
-            if use_chain:
-                if lane.chain_abs is None or lane.chain_abs - now < 1:
-                    return False  # the home move already started: replan from the new tail
-                cut = lane.chain_abs - now
-            else:
-                ta, th, _ = lane.tail()
-                if not (np.allclose(ta, sa) and np.allclose(th, sh)):
-                    return False
-                cut = len(lane.qa)
-            other = self.lanes["right" if side == "left" else "left"]
-            O = other.pts if len(other.qa) else np.empty((0,) + other.cmd_pts.shape)
-            O_last = other.pts[-1] if len(other.qa) else other.cmd_pts
-            d, closest = self._find_delay(cut, hold_pts, P, O, O_last)
-            other_parked = not len(other.qa)
+            cut = cut0 - (now - now0)  # same absolute start tick as searched
+            if other.version == other_ver and (cut >= 1 or (cut == 0 and now == now0)) and \
+                    (use_chain or cut == len(lane.qa)):
+                break
+            self.lock.release()  # the other arm committed meanwhile or our start slipped into the past: redo
+        else:
+            return False
+        try:
             if d is None:
                 why = (f"{side} {self.PT_NAMES[closest[1]]} vs {other.side} {self.PT_NAMES[closest[2]]} "
                        f"{100 * closest[0]:.1f} cm")
@@ -444,7 +462,10 @@ class FastSortPolicy:
                     p.end = now + cut
             gxy = np.asarray(plan.waypoints.get("grasp", np.r_[obj.xy, 0.0])[:2], float)
             lane.plans.append(LanePlan(obj, start_abs, now + cut + d + len(A), gxy))
+            lane.version += 1
             self.attempts.append(obj.xy)
+        finally:
+            self.lock.release()
         what = "relocate" if plan.target_bin == "counter" else f"-> {obj.bin}"
         self._note(self._t(), f"{side}: {obj.det.color} {what}  start +{(cut + d) / HZ:.1f}s (delay {d / HZ:.1f}s, "
                               f"{'chained' if use_chain else 'from tail'}), {len(A) / HZ:.1f}s, planned in {dt_plan:.2f}s")
