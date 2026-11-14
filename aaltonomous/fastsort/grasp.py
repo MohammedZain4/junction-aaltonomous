@@ -20,7 +20,17 @@ import numpy as np
 from aaltonomous.baselines.classical.perception import Perception
 from aaltonomous.baselines.classical.planner import Planner
 
-SQUARE_MIN, TRIANGLE_MAX = 0.88, 0.64     # hull/rect area ratio thresholds
+SQUARE_MIN, TRIANGLE_MAX = 0.88, 0.68     # hull/rect area ratio thresholds (DR bench medians: triangle 0.60, cylinder 0.80, cube 0.95)
+
+
+def hull_rect_ratio(xy):
+    """Convex hull area / minimum-area rectangle area of the top-face points (None if too few)."""
+    import cv2
+    if xy is None or len(xy) < 15:
+        return None
+    pts = np.asarray(xy, np.float32).reshape(-1, 1, 2)
+    (_, _), (w, h), _ = cv2.minAreaRect(pts)
+    return float(cv2.contourArea(cv2.convexHull(pts))) / max(float(w * h), 1e-9)
 
 
 def classify_top(xy):
@@ -123,8 +133,9 @@ class ShapePerception(Perception):
             z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
             top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
             det.shape, det.grasp_axes = classify_top(top[:, :2])
+            det.shape_ratio = hull_rect_ratio(top[:, :2])
         except Exception:
-            det.shape, det.grasp_axes = None, []
+            det.shape, det.grasp_axes, det.shape_ratio = None, [], None
         return det
 
 
@@ -168,7 +179,7 @@ class ShapePlanner(Planner):
             saved_h, saved_w = self.kin.hint, self.kin.w_hint
             try:
                 self.kin.w_hint = self.axis_hint_weight
-                for a in axes:
+                for a in axes[:2]:  # best two: a failing plan per axis costs ~1-4 s of IK
                     self.kin.hint = np.r_[a, 0.0]
                     p = self._plan_side(det, side, bin_name, arm_q, hand_q, **kw)
                     if p.ok:

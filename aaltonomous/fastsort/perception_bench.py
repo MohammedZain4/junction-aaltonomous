@@ -60,6 +60,7 @@ def main(argv=None):
     env = AaltoEnv(backend="sim", task="sort_fixed", seed=a.seeds[0], realtime=True, img_server_ip="127.0.0.1",
                    head_rgbd=True, head_rgbd_port=int(os.environ.get("AALTO_RGBD_PORT", "55560")), cameras=False)
     tot = dict(hit=0, miss=0, fp=0, shape_ok=0, shape_n=0)
+    conf = []   # (true shape, detected shape, hull/rect ratio)
     for s in a.seeds:
         home_arms(env, sc)
         env.rng = np.random.default_rng(s)
@@ -95,6 +96,7 @@ def main(argv=None):
                 used.add(bj)
                 tot["shape_n"] += 1
                 tot["shape_ok"] += int(getattr(d, "shape", None) == truth[bj]["shape"])
+                conf.append((truth[bj]["shape"], getattr(d, "shape", None), getattr(d, "shape_ratio", None)))
         miss = [o for j, o in enumerate(truth) if j not in used]
         tot["hit"] += len(used); tot["miss"] += len(miss); tot["fp"] += len(fps)
         line = f"seed {s:3d}: {len(truth)} objects, {len(used)} hit, {len(miss)} miss, {len(fps)} false"
@@ -115,6 +117,13 @@ def main(argv=None):
                 cv2.putText(img, d.color[0], (int(d.uv[0]) + 12, int(d.uv[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c, 1)
             cv2.imwrite(os.path.join(a.save, f"seed{s}.png"), img)
     env.close()
+    for ts in ("cube", "cylinder", "triangle"):
+        rows = [(d, r) for t_, d, r in conf if t_ == ts]
+        if rows:
+            rs = np.array([r for _, r in rows if r is not None])
+            got = {k: sum(1 for d, _ in rows if d == k) for k in ("cube", "cylinder", "triangle", None)}
+            print(f"  true {ts:<8} n={len(rows):2d} -> {got}  ratio min/med/max "
+                  f"{rs.min():.2f}/{np.median(rs):.2f}/{rs.max():.2f}" if len(rs) else f"  true {ts}: no ratios")
     n = tot["hit"] + tot["miss"]
     print(f"TOTAL: {tot['hit']}/{n} hit ({100 * tot['hit'] / max(n, 1):.0f}%), {tot['miss']} miss, {tot['fp']} false, "
           f"shape {tot['shape_ok']}/{tot['shape_n']}  (DR {'on' if dr else 'off'})")

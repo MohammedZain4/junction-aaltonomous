@@ -62,6 +62,7 @@ FAST_OVERRIDES = {
     # (S 72-88, V 190-250), blue H 111; bin tape H 4-5 (S 190, V 105-115), tape on the table H 4. The baseline's
     # sim ranges (red 0-8, yellow 18-35) would miss every real red and yellow object. Bins now fall in "red" in both
     # worlds and are removed geometrically (bin hull mask, footprint, bin-line rule); flat tape fails the height check.
+    "grasp.relocate.max_spots": 3,   # each spot = a full finishing plan + a pick plan: 6 spots took 9-27 s under load
     "perception.hsv": {
         "red":    [[[0, 70, 70], [20, 255, 255]], [[170, 70, 70], [180, 255, 255]]],
         "yellow": [[[21, 45, 90], [55, 255, 255]]],
