@@ -49,13 +49,14 @@ FAST_OVERRIDES = {
     "motion.close_hold_s": 0.2,
     "motion.open_hold_s": 0.25,
     "motion.settle_s": 0.2,
-    "motion.chunk": 10,             # ticks per reply: every reply carries ~3.5 MB of images to decode
-    "motion.hold_ticks": 6,
-    # Park/home pose = the robot-side home (hands ~22 cm out to the sides, above the bins' height, outside the head
-    # camera view) instead of the sim's ARM_HOME, which parks both hands right above the middle of the object band:
-    # there an idle arm blocks the other arm from every object near the centre line, and it hides objects.
-    "home_arm_q": [0.2, 0.7, 0.4, -0.2, 0.0, -0.5, 0.0,
-                   0.2, -0.7, -0.4, -0.2, 0.0, -0.5, 0.0],
+    "motion.chunk": 15,             # ticks per reply: every reply carries ~3.5 MB of images to decode (27 Hz gate)
+    "motion.hold_ticks": 10,
+    # Park/home pose: arms raised out to the sides (shoulder roll 1.8). FK: hand points >= 31.8 cm from the centre
+    # line, >= 27 cm above the pelvis, 64 cm apart, none in the head camera view. The sim's ARM_HOME parks both hands
+    # above the middle of the object band (blocks the other arm, hides objects); the robot-side home (roll 0.7,
+    # 21.6 cm out) still blocked cross-body reaches to the far edge (6.6 cm finger-to-finger).
+    "home_arm_q": [0.0, 1.8, 0.0, 0.2, 0.0, 0.0, 0.0,
+                   0.0, -1.8, 0.0, 0.2, 0.0, 0.0, 0.0],
 }
 
 
