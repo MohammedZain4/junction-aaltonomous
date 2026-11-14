@@ -502,6 +502,14 @@ class FastSortPolicy:
         self._note(self._t(), f"{side}: put back {p.obj.det.color}->{new_color} object (delay {d / HZ:.1f}s)")
 
     def _abort_pick(self, lane, p):
+        # planning the abort takes a few ms to ~0.1 s; a chunk going out meanwhile moves the arm, so replan from the
+        # new commanded pose (was: give up silently, which happened to 3 of 9 MISS verdicts in one eval)
+        for _ in range(4):
+            if self._abort_pick_once(lane, p) != "retry":
+                return
+        self._note(self._t(), f"{lane.side}: abort raced the command stream 4x: finishing the pick")
+
+    def _abort_pick_once(self, lane, p):
         """Empty hand after the lift: drop the rest of this pick (carry, open, home) and the look-ahead plan queued
         behind it, open the hand and head home from where it is. The new home move is chainable, so the next pick
         can start straight from here. Collision-checked against the other arm and the counter/bin rims; if it can't
@@ -533,7 +541,7 @@ class FastSortPolicy:
         other = self.lanes["right" if side == "left" else "left"]
         with self.lock:
             if self.tick != now or lane.cmd_pts is not hold_pts:
-                return   # a chunk went out meanwhile: the next observation re-checks nothing; finish the pick
+                return "retry"   # a chunk went out meanwhile: plan again from the new commanded pose
             O = other.pts if len(other.qa) else np.empty((0,) + other.cmd_pts.shape)
             O_last = other.pts[-1] if len(other.qa) else other.cmd_pts
             d, _ = self._find_delay(0, hold_pts, P, O, O_last, max_delay=max(240, len(O) + 30))
