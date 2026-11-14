@@ -124,6 +124,7 @@ class Lane:
 
 
 class FastSortPolicy:
+    max_attempts_total = 3          # direct grasps of one object (any arm) before giving up on it
     def __init__(self, config=None, scene=None, calibration=None, time_limit=120.0, log=print, overrides=None,
                  min_arm_dist=0.075):  # between link origins (palm, finger links, wrist, elbow), not surfaces
         ov = dict(FAST_OVERRIDES) if os.environ.get("AALTO_FAST", "1") != "0" else {}
@@ -176,7 +177,7 @@ class FastSortPolicy:
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
         self.last_look_obs_tick = -1
-        self.attempts = []          # grasp xy of every committed pick
+        self.attempts = []          # (xy, side, colour, is_relocation) of every committed pick
         self.failed = []            # xy that could not be planned
         self.events = []
         self._halt = False
@@ -342,7 +343,10 @@ class FastSortPolicy:
                 continue
             if self._is_failed(xy):
                 continue
-            if sum(1 for a in self.attempts if np.linalg.norm(xy - a) < r) >= self.cfg["policy"]["max_attempts"]:
+            # earlier direct picks of a same-colour object near here that left it on the counter = failed grasps.
+            # 6 cm, not same_object_radius: a failed grasp usually nudges the object (sim: one cube was retried 6x).
+            prior = [a for a in self.attempts if a[2] == d.color and not a[3] and np.linalg.norm(xy - a[0]) < 0.06]
+            if len(prior) >= self.max_attempts_total:
                 continue
             if any(np.linalg.norm(xy - g) < 0.06 for g, _ in inflight):
                 continue
@@ -356,6 +360,15 @@ class FastSortPolicy:
                       key=lambda p: np.linalg.norm(p.xy - xy), default=None)
             if old is not None:
                 o.pref, o.tried, o.reloc, o.not_before = old.pref, set(old.tried), old.reloc, old.not_before
+            # an arm whose grasp already failed here doesn't try the same thing again: other arm, then relocation
+            failed_sides = {a[1] for a in prior}
+            if failed_sides and not o.reloc:
+                o.tried |= failed_sides
+                if len(o.tried) >= 2:
+                    o.reloc, o.tried = True, set()
+                    o.pref = "left" if xy[1] > 0 else "right"
+                elif o.pref in o.tried:
+                    o.pref = "right" if o.pref == "left" else "left"
             pool.append(o)
         self.pool = pool
         self._note(self._t(), f"look: {len(dets)} detections, {len(pool)} to sort: "
@@ -474,7 +487,7 @@ class FastSortPolicy:
             gxy = np.asarray(plan.waypoints.get("grasp", np.r_[obj.xy, 0.0])[:2], float)
             lane.plans.append(LanePlan(obj, start_abs, now + cut + d + len(A), gxy))
             lane.version += 1
-            self.attempts.append(obj.xy)
+            self.attempts.append((obj.xy, side, obj.det.color, plan.target_bin == "counter"))
         finally:
             self.lock.release()
         what = ("relocate" if plan.target_bin == "counter" else f"-> {obj.bin}") + (f" [{plan.reason}]" if plan.reason else "")
