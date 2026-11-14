@@ -98,7 +98,10 @@ step_isaacsim() {
     # during its own resolver, then let Isaac Lab install its required versions.
     local isaacsim_constraints="$TP/constraints-isaacsim${1:+_$1}.txt"
     grep -q '^urllib3==' "$PIP_CONSTRAINT"
+    # isaacsim-core 6.2.0.0 pins llvmlite 0.46 (Isaac Lab's numba 0.68 then upgrades it to 0.50).
     sed -e 's/^urllib3==.*/urllib3==2.7.0/' -e 's/^click==.*/click==8.3.3/' \
+      -e 's/^llvmlite==.*/llvmlite==0.46.0/' -e 's/^fsspec==.*/fsspec==2026.2.0/' \
+      -e 's/^onnxruntime==.*/onnxruntime==1.26.0/' -e 's/^psutil==.*/psutil==5.9.8/' \
       "$PIP_CONSTRAINT" > "$isaacsim_constraints"
     # The 10.5 GB extension cache first, as its own step (= its own image layer in the Dockerfile).
     if [[ "${1:-}" != rest ]]; then
