@@ -86,16 +86,18 @@ def main(argv=None):
                 g = P[1] @ to_true[:3, :3].T + to_true[:3, 3]
                 obj = min((r for r in ref if r[0] == d.color), key=lambda r: np.linalg.norm(r[1][:2] - g[:2]), default=None)
                 exy = float(np.linalg.norm(obj[1][:2] - g[:2])) if obj is not None else float("nan")
+                clip = pol.planner.dry_run_safety(pol.home.copy(), pol.post["open"].copy(), plan.arm, plan.hand)
+                t["clip"] = t.get("clip", 0) + int(bool(clip))
                 t["below"] += int(lo < cz - 0.002)
                 t["xy"].append(exy)
                 print(f"   {d.color:<6} {str(getattr(d, 'shape', None)):<8} -> {b:<6} {side:<5} lowest hand point "
                       f"{(lo - cz) * 100:+5.1f} cm vs real counter, grasp point z {(g[2] - cz) * 100:4.1f} cm, "
-                      f"xy {exy * 1000:4.0f} mm from object (true frame)")
+                      f"xy {exy * 1000:4.0f} mm from object (true frame), safety filter clips {clip} steps")
             set_kin_world(pol.kin, np.eye(4))
     for m, t in tot.items():
         xy = np.array(t["xy"]) * 1000
         print(f"[{m}] {t['ok']}/{t['n']} planned, {t['below']} plans put the hand >2 mm into the real counter, "
-              f"grasp xy error median {np.nanmedian(xy) if xy.size else float('nan'):.0f} mm")
+              f"{t.get('clip', 0)} clipped by the safety filter, grasp xy error median {np.nanmedian(xy) if xy.size else float('nan'):.0f} mm")
     return 0
 
 
