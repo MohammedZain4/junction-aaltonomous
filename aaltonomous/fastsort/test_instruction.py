@@ -96,6 +96,14 @@ PARAPHRASES = [
      M("right", "center", "left")),
     ("Sort them so that the left box ends up with all the blue things and the right box with all the red things.",
      M("right", "center", "left")),
+    # real object colours (organisers 2026-11-14): orange = red, purple = blue; the bins are orange boxes
+    ("Put the orange objects in the left bin, the purple ones in the right bin and the yellow ones in the middle.",
+     M("left", "center", "right")),
+    ("Purple goes left, orange goes right, yellow center.", M("right", "center", "left")),
+    ("Sort them: violet into the center box, orange into the left box, yellow into the right box.",
+     M("left", "right", "center")),
+    ("Put the purple objects in the left orange box, the orange objects in the right orange box and the yellow "
+     "objects in the middle orange box.", M("right", "center", "left")),
     ("", M("left", "center", "right")),
     ("asdf qwerty", M("left", "center", "right")),
 ]

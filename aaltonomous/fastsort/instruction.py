@@ -34,10 +34,14 @@ FIXED_MAPPING = {"red": "left", "yellow": "center", "blue": "right"}
 _COLOR_WORDS = {
     "red": "red", "reds": "red", "reddish": "red", "crimson": "red", "scarlet": "red", "maroon": "red",
     "ruby": "red", "cherry": "red",
+    # The real objects are orange / yellow / purple (organisers, 2026-11-14): orange plays "red", purple "blue".
+    "orange": "red", "oranges": "red", "orangey": "red", "tangerine": "red", "amber-red": "red",
     "yellow": "yellow", "yellows": "yellow", "yellowish": "yellow", "gold": "yellow", "golden": "yellow",
     "amber": "yellow", "lemon": "yellow",
     "blue": "blue", "blues": "blue", "bluish": "blue", "navy": "blue", "azure": "blue", "cyan": "blue",
-    "cobalt": "blue", "sapphire": "blue", "teal": "blue", "blu": "blue", "bleu": "blue", "rd": "red",
+    "cobalt": "blue", "sapphire": "blue", "teal": "blue",
+    "purple": "blue", "purples": "blue", "purplish": "blue", "violet": "blue", "lilac": "blue", "lavender": "blue",
+    "magenta": "blue", "indigo": "blue", "mauve": "blue", "blu": "blue", "bleu": "blue", "rd": "red",
     "yelow": "yellow", "yello": "yellow", "yelloww": "yellow",
     # Finnish / Swedish / German stems are handled in _foreign()
 }
@@ -131,7 +135,9 @@ def _foreign(w):
 
 def _normalise(text):
     t = " " + text.lower().replace("’", "'").replace("-", " ") + " "
-    t = re.sub(r"left\s+hand(ed)?", "lefthand", t)
+    # the bins themselves are orange boxes: "the left orange box" names a bin, not the orange objects
+    t = re.sub(r"\borange\s+(bin|bins|box|boxes|container|containers|basket|baskets|tray|trays|crate|crates)\b", r"\1", t)
+    t = re.sub(r"\bleft\s+hand(ed)?", "lefthand", t)
     t = re.sub(r"right\s+hand(ed)?", "righthand", t)
     t = re.sub(r"\bleft[\s]*most\b", "left", t)
     t = re.sub(r"\bright[\s]*most\b", "right", t)
