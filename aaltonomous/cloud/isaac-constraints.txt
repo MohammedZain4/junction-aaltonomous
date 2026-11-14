@@ -148,7 +148,7 @@ lazy-importer==0.1.0
 lazy-loader==0.6
 libcoal==3.0.2
 libpinocchio==3.9.0
-llvmlite==0.46.0
+llvmlite==0.50.0
 logging-mp==0.2.5
 loop-rate-limiters==1.2.0
 lxml==7.0.0b1
