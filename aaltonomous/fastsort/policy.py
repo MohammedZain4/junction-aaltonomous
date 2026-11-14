@@ -31,7 +31,7 @@ import numpy as np
 
 from aaltonomous.baselines.classical.config import hand_postures, home_arm, load_config
 from aaltonomous.baselines.classical.kinematics import ArmKinematics
-from .calib import estimate_xy_offset
+from .calib import estimate_xy_offset, first_look_calibration, set_kin_world  # noqa: F401
 from .grasp import ShapePerception, ShapePlanner
 
 from aaltonomous.interface.calibration import Calibration
@@ -148,6 +148,7 @@ class FastSortPolicy:
         self.safety = SafetyConfig(dt=1.0 / HZ)
         self.perception = ShapePerception(self.cfg, self.scene, self.cal)
         self._xy_base = np.asarray(self.perception.xy_offset, float).copy()
+        self._T_head0 = np.asarray(self.cal._T(self.perception.cam), float).copy()
         self.planner = ShapePlanner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.time_limit = float(time_limit)
         self.min_arm_dist = float(min_arm_dist)
@@ -580,25 +581,24 @@ class FastSortPolicy:
         return np.asarray(self.CALIB_BIAS, float)
 
     def _self_calibrate(self, depth):
-        """Head xy offset from the bins (fastsort.calib), once per episode at the first look (arms parked)."""
+        """Once per episode at the first look (arms parked): level the counter plane (head tilt / height, fastsort.calib)
+        then fit the bins in xy. AALTO_SELF_CALIB=0 disables both, AALTO_LEVEL=0 only the levelling."""
+        self.cal.cams[self.perception.cam].T_pelvis_optical = self._T_head0.copy()
         self.perception.xy_offset = self._xy_base.copy()
+        set_kin_world(self.kin, np.eye(4))
         if os.environ.get("AALTO_SELF_CALIB", "1") == "0":
             return
         try:
-            est = estimate_xy_offset(self.perception, depth)
-        except Exception as e:
-            self._note(self._t(), f"self-calibration failed: {e!r}")
-            return
-        if est is None:
-            self._note(self._t(), "self-calibration: not enough bin wall points, using the configured extrinsics")
-            return
-        off = est["offset"]
-        good = est["cost"] < 0.8 * est["cost0"] and np.linalg.norm(off) <= 0.03
-        if good:
-            self.perception.xy_offset = self._xy_base - off + self.calib_bias()
-        self._note(self._t(), f"self-calibration: bins seen {np.round(off * 1000, 1)} mm off, fit {est['cost0'] * 1000:.1f}"
-                              f" -> {est['cost'] * 1000:.1f} mm, inliers {est['inliers']:.2f}: "
-                              + ("applied" if good else "NOT applied"))
+            notes, W = first_look_calibration(self.perception, depth, self._T_head0, self._xy_base, self.calib_bias(),
+                                              level=os.environ.get("AALTO_LEVEL", "1") != "0")
+            set_kin_world(self.kin, W)   # body lean: arms planned in the levelled world frame too (identity otherwise)
+        except Exception as e:   # never let calibration break an episode: fall back to the configured extrinsics
+            self.cal.cams[self.perception.cam].T_pelvis_optical = self._T_head0.copy()
+            self.perception.xy_offset = self._xy_base.copy()
+            set_kin_world(self.kin, np.eye(4))
+            notes = [f"self-calibration failed: {e!r}"]
+        for n in notes:
+            self._note(self._t(), n)
 
     def _charge(self, tick0, wall0):
         """Real-time emulation: the brain was busy from tick0 for (now - wall0) wall seconds."""

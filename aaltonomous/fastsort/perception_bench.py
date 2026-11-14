@@ -66,6 +66,7 @@ def main(argv=None):
     errs = []   # xy error (m) of every matched detection
     vecs = []   # (seed, shape, det shape, true x, true y, true z, dx, dy) signed error = detected - true, m
     jout = open(a.out, "a") if a.out else None
+    T0 = None   # configured head extrinsics, restored before every first-look calibration
     for s in a.seeds:
         home_arms(env, sc)
         env.rng = np.random.default_rng(s)
@@ -85,15 +86,15 @@ def main(argv=None):
             print(f"seed {s}: no frame")
             continue
         truth = [o for o in sc.state()["objects"] if o["active"]]
-        if a.calib:
-            from .calib import estimate_xy_offset
-            per.xy_offset = np.asarray(per.cfg.get("xy_offset") or [0.0, 0.0], float)
-            est = estimate_xy_offset(per, depth)
-            if est is not None:
-                from .policy import FastSortPolicy
-                per.xy_offset = per.xy_offset - est["offset"] + FastSortPolicy.calib_bias(FastSortPolicy)
-                print(f"  calib seed {s}: offset {np.round(est['offset'] * 1000, 1)} mm, cost {est['cost0'] * 1000:.1f}"
-                      f" -> {est['cost'] * 1000:.1f} mm, inliers {est['inliers']:.2f}, n {est['n']}")
+        if a.calib:   # the policy's first-look routine (table levelling unless AALTO_LEVEL=0, bin fit, bias)
+            from .calib import first_look_calibration
+            from .policy import FastSortPolicy
+            if T0 is None:
+                T0 = np.asarray(cal._T(per.cam), float).copy()
+            notes, _W = first_look_calibration(per, depth, T0, np.asarray(per.cfg.get("xy_offset") or [0.0, 0.0], float),
+                                           FastSortPolicy.calib_bias(FastSortPolicy),
+                                           level=os.environ.get("AALTO_LEVEL", "1") != "0")
+            print(f"  calib seed {s}: " + " | ".join(notes))
         dets = per.detect(rgb, depth)
         used, fps = set(), []
         for d in dets:
