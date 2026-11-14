@@ -142,6 +142,24 @@ class ShapePerception(Perception):
 class ShapePlanner(Planner):
     max_axis_err_deg = 20.0
     axis_hint_weight = 1.0
+    reloc_max_x = 0.31   # m (pelvis): hand-off spots in the near half of the object band
+
+    def relocation_spots(self, det, bin_name, obstacles=()):
+        """Like the baseline, but only spots in the near half of the band: spots next to the bins (x ~0.35) failed
+        the bin-rim clearance for the finishing arm in DR runs (fingers reach forward over the near bin wall)."""
+        rc = self.cfg["grasp"].get("relocate", {})
+        L = self.scene.cfg["layout"]
+        m = float(rc.get("region_margin", 0.02))
+        xs = np.linspace(L["region_x"][0] - m, L["region_x"][1] + m, 9)
+        ys = np.linspace(L["region_y"][0] - m, L["region_y"][1] + m, 6)
+        pts = self.scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in xs for y in ys]))[:, :2]
+        clear = float(rc.get("clearance", L["min_spacing"]))
+        obs = np.asarray(list(obstacles), float).reshape(-1, 2)
+        keep = [p for p in pts if p[0] <= self.reloc_max_x and np.linalg.norm(p - det.top[:2]) > 0.06
+                and (len(obs) == 0 or np.linalg.norm(obs - p, axis=1).min() > clear)]
+        b = self.bin_xy(bin_name)
+        keep.sort(key=lambda p: np.linalg.norm(p - b))
+        return keep[: int(rc.get("max_spots", 6))]
 
     def _axis_hints(self, det, side):
         """Object pinch axes as finger directions: sign chosen to point forward (fingers can't point back at the
