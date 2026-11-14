@@ -30,8 +30,8 @@ import numpy as np
 
 from aaltonomous.baselines.classical.config import hand_postures, home_arm, load_config
 from aaltonomous.baselines.classical.kinematics import ArmKinematics
-from aaltonomous.baselines.classical.perception import Perception
-from aaltonomous.baselines.classical.planner import Planner
+from .grasp import ShapePerception, ShapePlanner
+
 from aaltonomous.interface.calibration import Calibration
 from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene
@@ -126,8 +126,8 @@ class FastSortPolicy:
         self.home = home_arm(self.cfg, self.spec)
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = SafetyConfig(dt=1.0 / HZ)
-        self.perception = Perception(self.cfg, self.scene, self.cal)
-        self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
+        self.perception = ShapePerception(self.cfg, self.scene, self.cal)
+        self.planner = ShapePlanner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.time_limit = float(time_limit)
         self.min_arm_dist = float(min_arm_dist)
         self.log = log or (lambda *a: None)
