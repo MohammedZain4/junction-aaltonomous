@@ -77,7 +77,8 @@ class ShapePerception(Perception):
     bin_line_margin = 0.015   # m in front of the bins' near edge
 
     # Reference hues (OpenCV H, 0-180) of each colour in the sim (scene.yaml RGB) and on the real head camera (Drop 0).
-    hue_prototypes = {"red": (0.0, 14.0), "yellow": (25.0, 43.0), "blue": (113.0, 111.0)}
+    # Real blue class = purple/lavender: H 110-112 on the Drop 0/2 head camera, H ~127 in the organisers' lab notes.
+    hue_prototypes = {"red": (0.0, 14.0), "yellow": (25.0, 43.0), "blue": (113.0, 111.0, 127.0)}
     dominant_frac = 0.7
 
     def masks(self, rgb):
@@ -100,11 +101,25 @@ class ShapePerception(Perception):
         near = np.argmin(dist, axis=0)
         out = {c: np.zeros(H.shape, np.uint8) for c in names}
         n, lab = cv2.connectedComponents(any_m, connectivity=8)
+        k5 = np.ones((5, 5), np.uint8)
+        min_area = int(self.cfg.get("min_area_px", 120))
         for i in range(1, n):
             sel = lab == i
             counts = np.bincount(near[sel], minlength=len(names))
             k = int(counts.argmax())
-            if counts[k] >= self.dominant_frac * counts.sum():
+            whole = counts[k] >= self.dominant_frac * counts.sum()
+            if whole:
+                # Real frames (Drop 2): a purple / yellow object touching an orange bin joins the bin's blob and was
+                # out-voted -> painted "red". Absorb only thin shaded fringes: a minority part that survives a 5x5
+                # opening with object-sized area is a separate object, so split per pixel.
+                for j in range(len(names)):
+                    if j == k or counts[j] < min_area:
+                        continue
+                    part = cv2.morphologyEx((sel & (near == j)).astype(np.uint8), cv2.MORPH_OPEN, k5)
+                    if int(part.sum()) >= min_area:
+                        whole = False
+                        break
+            if whole:
                 out[names[k]][sel] = 255
             else:
                 for j, c in enumerate(names):
