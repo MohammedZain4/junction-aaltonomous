@@ -61,7 +61,7 @@ aalto eval --policy ws://localhost:8000 --task sort_language             # in th
 ```
 
 Environment switches (all optional):
-- `AALTO_GRIP_CHECK=log|act|0`
+- `AALTO_GRIP_CHECK=act|head|log|0` (default act)
 - `AALTO_RT_EMULATE=1`
 - `AALTO_SELF_CALIB=0`
 - `AALTO_SHAPE_GRASP=0`

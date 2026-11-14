@@ -187,9 +187,9 @@ class FastSortPolicy:
         self.obs_hist = collections.deque(maxlen=8)   # (tick, obs) of the last act() calls (~0.5 s apart)
         self.color_fix = []                            # (xy, colour) corrected by the wrist-camera colour check
         self.shape_votes = []                          # per-object shape votes across looks (_vote_shape)
-        # head (default): abort a pick only on the head-camera cue (object still on the table at the grasp spot),
-        # wrist cues logged; act: wrist cues act too (after calibration); log: never act; 0: off
-        self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "head")
+        # act (default): abort on the head-camera cue OR the finger/wrist verdict; head: head cue only;
+        # log: never act; 0: off
+        self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "act")
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
         self.last_look_obs_tick = -1
@@ -405,9 +405,11 @@ class FastSortPolicy:
                 did = True
         return did
 
-    # Grip verdict thresholds (placeholders until fitted on grasp_bench --wrist data). Conservative by design: abort
-    # only when BOTH cues say empty; a wrong abort costs a whole pick, a missed abort only the wasted trip.
-    grip_j_empty = 0.08     # rad: max finger tracking error below this = fingers reached the closed posture
+    # Grip verdict thresholds. Conservative by design: abort only when BOTH cues say empty (fingers closed fully AND
+    # no object blob that moves with the wrist camera); a wrong abort costs a whole pick, a missed one the trip.
+    grip_j_empty = 0.015    # rad: max finger tracking error below this = fingers reached the closed posture.
+                            # grasp_bench --wrist, 12 labelled sim picks: every miss 0.00, every hold 0.02-0.05. On
+                            # the real hand an empty grip likely reads > 0 -> "held" -> no action (fails safe)
     grip_frac_min = 0.03    # wrist blob of the object's colour, fraction of the image
     grip_iou_min = 0.5      # ... that stays put between early and late lift (moves with the camera)
     grip_head_px = 60       # head pixels of the object's colour still at table height within 3.5 cm of the grasp xy
