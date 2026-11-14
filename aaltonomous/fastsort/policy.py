@@ -349,7 +349,7 @@ class FastSortPolicy:
             pool.append(o)
         self.pool = pool
         self._note(self._t(), f"look: {len(dets)} detections, {len(pool)} to sort: "
-                              + ", ".join(f"{o.det.color}->{o.bin}({o.pref[0]})" for o in pool))
+                              + ", ".join(f"{o.det.color} {getattr(o.det, 'shape', None) or '?'}->{o.bin}({o.pref[0]})" for o in pool))
 
     def _candidates(self, side):
         if not self.pool:
@@ -467,7 +467,7 @@ class FastSortPolicy:
             self.attempts.append(obj.xy)
         finally:
             self.lock.release()
-        what = "relocate" if plan.target_bin == "counter" else f"-> {obj.bin}"
+        what = ("relocate" if plan.target_bin == "counter" else f"-> {obj.bin}") + (f" [{plan.reason}]" if plan.reason else "")
         self._note(self._t(), f"{side}: {obj.det.color} {what}  start +{(cut + d) / HZ:.1f}s (delay {d / HZ:.1f}s, "
                               f"{'chained' if use_chain else 'from tail'}), {len(A) / HZ:.1f}s, planned in {dt_plan:.2f}s")
         return True

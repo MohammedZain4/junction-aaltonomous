@@ -62,15 +62,14 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(shape, "cylinder")
         self.assertEqual(axes, [])
 
-    def test_triangle_altitudes(self):
+    def test_triangle_axes_parallel_to_sides(self):
         for deg in (0, 25, -40):
             inside, V = triangle(np.radians(deg))
             shape, axes = classify_top(grid(inside))
             self.assertEqual(shape, "triangle", deg)
             self.assertEqual(len(axes), 3)
-            for i in range(3):  # each altitude: vertex -> midpoint of the opposite side
-                mid = 0.5 * (V[(i + 1) % 3] + V[(i + 2) % 3])
-                self.assertTrue(axis_close(axes, mid - V[i]), (deg, i, axes))
+            for i in range(3):  # default pinch axes: parallel to each side
+                self.assertTrue(axis_close(axes, V[(i + 1) % 3] - V[i]), (deg, i, axes))
 
     def test_too_few_points(self):
         self.assertEqual(classify_top(np.zeros((5, 2))), (None, []))

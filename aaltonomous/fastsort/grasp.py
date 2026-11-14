@@ -13,6 +13,8 @@ The claw grasp pinches along the finger direction (fingers curl down in front, t
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from aaltonomous.baselines.classical.perception import Perception
@@ -44,10 +46,13 @@ def classify_top(xy):
         except cv2.error:
             return "triangle", []
         tri = tri.reshape(3, 2).astype(float)
+        mode = os.environ.get("AALTO_TRI_AXIS", "side")
         axes = []
         for i in range(3):
-            mid = 0.5 * (tri[(i + 1) % 3] + tri[(i + 2) % 3])
-            v = mid - tri[i]
+            if mode == "altitude":   # flat side <-> opposite vertex: tested in sim, the vertex slips (1/4)
+                v = 0.5 * (tri[(i + 1) % 3] + tri[(i + 2) % 3]) - tri[i]
+            else:                    # parallel to a side: both contacts on the two sloped faces, symmetric
+                v = tri[(i + 2) % 3] - tri[(i + 1) % 3]
             n = np.linalg.norm(v)
             if n > 1e-6:
                 axes.append(v / n)
@@ -105,7 +110,7 @@ class ShapePlanner(Planner):
         return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
 
     def _plan_side_hints(self, det, side, bin_name, arm_q, hand_q, **kw):
-        axes = self._axis_hints(det, side)
+        axes = self._axis_hints(det, side) if os.environ.get("AALTO_SHAPE_GRASP", "1") != "0" else []
         if axes:
             saved_h, saved_w = self.kin.hint, self.kin.w_hint
             try:
