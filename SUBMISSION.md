@@ -4,7 +4,7 @@ Deadline: **Sun 2026-11-15 10:00**. Partners judge the digital materials; peer r
 
 | Field | What we hand in | Status |
 |---|---|---|
-| Demo (digital) | Sim evaluation clips + the Docker policy server (`docker/fastsort.Dockerfile`, image `fastsort:v6`, built from commit 1504c4a) | v6 built; end-to-end check queued (`/root/q_v6.sh`) |
+| Demo (digital) | Sim evaluation clips + the Docker policy server (`docker/fastsort.Dockerfile`, image `fastsort:v7`, built from commit 9b44f36 + dockerignore fix) | v7 built; end-to-end check queued (`/root/q_v7.sh`) |
 | Source code | GitHub repo (make it **public** before submitting) | private now |
 | Video (max 2 min) | Demo reel v2 (`scripts/make_demo.sh`, 38 s, `fastsort_demo_v2.mp4`) | to review together |
 | Team info | Solo entry, filled in by hand on the platform | to do (you) |
@@ -32,6 +32,9 @@ free-form spoken-style instruction. It ships as a single CPU-only Docker policy 
   confirm the object is in the hand; if the hand is empty, the arm aborts at once and the pick is retried.
 - **Built for the real robot.** Colour thresholds were tuned on real head-camera footage (orange, purple and yellow
   objects; orange bins). The sim scene was recoloured to match the real objects and bins. It works within the 120 s
-  limit and through the organisers' safety filter.
+  limit and through the organisers' safety filter. From the real-robot depth recordings we found the robot leans
+  about 14° towards the table; at the first look FastSort fits the table plane and, when it sees such a lean, plans
+  both the camera view and the arm motions in a level table frame. Without that, 10 of 13 grasps planned on real
+  frames would have pushed the hand into the table; with it, none do.
 
 Tech: Python, NumPy, inverse kinematics with a full-arm collision model, RGB-D perception, Isaac Sim for evaluation.
