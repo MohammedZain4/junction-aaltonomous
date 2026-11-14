@@ -641,6 +641,7 @@ class FastSortPolicy:
                       key=lambda p: np.linalg.norm(p.xy - xy), default=None)
             if old is not None:
                 o.pref, o.tried, o.reloc, o.not_before = old.pref, set(old.tried), old.reloc, old.not_before
+                o.n_blocked = getattr(old, "n_blocked", 0)
             # an arm whose grasp already failed here doesn't try the same thing again: other arm, then relocation
             failed_sides = {a[1] for a in prior}
             d.retry = len(prior)   # ShapePlanner starts from the next grasp axis on a retry
@@ -803,8 +804,13 @@ class FastSortPolicy:
                     # the other arm is not moving: waiting cannot help -> this arm can't do it, like a planning failure
                     self._side_failed(obj, side, f"collides with the parked {other.side} arm ({why})")
                 else:
-                    obj.not_before = now + 15
-                    self._note(self._t(), f"{side}: {obj.det.color} would collide with the other arm ({why}): later")
+                    # exponential back-off: every retry is a full plan (2-3 s of brain time); seed 2005 retried every
+                    # 0.5 s for 7 s and the planning debt delayed every later move by 25-40 s
+                    k = getattr(obj, "n_blocked", 0)
+                    obj.n_blocked = k + 1
+                    obj.not_before = now + min(120, 15 * 2 ** k)
+                    self._note(self._t(), f"{side}: {obj.det.color} would collide with the other arm ({why}): "
+                                          f"later (+{min(120, 15 * 2 ** k) / HZ:.1f}s)")
                 return False
             wait = d - d0
             if use_chain and wait > self.max_wait_chain and not other_parked:
@@ -817,7 +823,9 @@ class FastSortPolicy:
             if wait > self.max_wait and not other_parked:
                 # a reservation far in the future pushes the other arm's next plans back too (28 s + 38 s snowball,
                 # seed 2005): try again when the timeline has moved on
-                obj.not_before = now + max(15, (wait - self.max_wait) // 2)
+                k = getattr(obj, "n_blocked", 0)
+                obj.n_blocked = k + 1
+                obj.not_before = now + max(min(120, 15 * 2 ** k), (wait - self.max_wait) // 2)
                 self._note(self._t(), f"{side}: {obj.det.color} would wait {wait / HZ:.1f}s: later")
                 return False
             t_end = (now + cut + d + len(A)) / HZ
