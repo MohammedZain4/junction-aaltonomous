@@ -194,6 +194,7 @@ class FastSortPolicy:
         self.last_look_tick = -10_000
         self.last_look_obs_tick = -1
         self.attempts = []          # (xy, side, colour, is_relocation) of every committed pick
+        self.bin_drops = {}         # bin -> releases committed so far (next release goes to the next slot)
         self.failed = []            # xy that could not be planned
         self.events = []
         self._halt = False
@@ -734,7 +735,15 @@ class FastSortPolicy:
             # failure cost 2.5-4 s of planning. Go straight to the hand-off.
             obj.reloc, obj.tried = True, set()
         if not obj.reloc:
-            plan = self.planner._plan_side_hints(obj.det, side, obj.bin, arm_q, hand_q)
+            k = self.bin_drops.get(obj.bin, 0)
+            self.planner.drop_slot = {obj.bin: k}
+            try:
+                plan = self.planner._plan_side_hints(obj.det, side, obj.bin, arm_q, hand_q)
+                if not plan.ok and k:   # slot out of reach: the usual release point (stacking beats no plan)
+                    self.planner.drop_slot = {}
+                    plan = self.planner._plan_side_hints(obj.det, side, obj.bin, arm_q, hand_q)
+            finally:
+                self.planner.drop_slot = {}
             if not plan.ok:
                 self._side_failed(obj, side, f"no plan: {plan.reason}")
                 return None
@@ -837,6 +846,8 @@ class FastSortPolicy:
                                        None if ce is None else H[ce - 1].copy(), plan_a=A, plan_h=H))
             lane.version += 1
             self.attempts.append((obj.xy, side, obj.det.color, plan.target_bin == "counter"))
+            if plan.target_bin != "counter":
+                self.bin_drops[obj.bin] = self.bin_drops.get(obj.bin, 0) + 1
         finally:
             self.lock.release()
         what = ("relocate" if plan.target_bin == "counter" else f"-> {obj.bin}") + (f" [{plan.reason}]" if plan.reason else "")

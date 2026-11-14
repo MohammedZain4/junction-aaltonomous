@@ -171,6 +171,34 @@ class ShapePerception(Perception):
 
 
 class ShapePlanner(Planner):
+    drop_slot: dict = {}       # bin -> slot index for the next release (set by the policy per plan)
+    slot_step = 0.05           # m between release slots (object 45 mm: neighbours never stack)
+
+    def drop_xy(self, name):
+        """Release point: the baseline point (inner corner nearest the pelvis, drop_inset inside the walls), moved to
+        slot k inside the inset box. A second object released on the first one rests above the rim, and an object
+        whose centre is above the rim does NOT count as in the bin (scene.classify_cube): 2 of 5 lost that way."""
+        base = super().drop_xy(name)
+        k = int(self.drop_slot.get(name, 0) or 0)
+        inset = self.cfg["grasp"].get("drop_inset")
+        if k <= 0 or inset is None:
+            return base
+        c = self.bin_xy(name)
+        lo, hi = self.scene.bin_inner_box(name)
+        a, b = self.scene.mat_to_pelvis(np.r_[lo[:2], 0.0])[:2], self.scene.mat_to_pelvis(np.r_[hi[:2], 0.0])[:2]
+        lo2 = np.minimum(np.minimum(a, b) + inset, c)
+        hi2 = np.maximum(np.maximum(a, b) - inset, c)
+        mid = 0.5 * (lo2 + hi2)
+        st = self.slot_step
+        sx = 1.0 if base[0] <= mid[0] else -1.0
+        if abs(base[1] - mid[1]) < 1e-3:      # centre bin: release point mid-width, spread sideways first
+            slots = [(0.0, 0.0), (0.0, 0.8 * st), (0.0, -0.8 * st), (sx * st, 0.0), (sx * st, 0.8 * st),
+                     (sx * st, -0.8 * st)]
+        else:
+            sy = 1.0 if base[1] <= mid[1] else -1.0
+            slots = [(0.0, 0.0), (0.0, sy * st), (sx * st, 0.0), (sx * st, sy * st)]
+        return np.clip(base + np.asarray(slots[k % len(slots)], float), lo2, hi2)
+
     max_axis_err_deg = 20.0
     axis_hint_weight = 1.0
     reloc_max_x = 0.31   # m (pelvis): hand-off spots in the near half of the object band
