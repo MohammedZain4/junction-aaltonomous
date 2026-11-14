@@ -432,6 +432,10 @@ class FastSortPolicy:
         arm_q[sl], hand_q[sl] = sa, sh
 
         t0 = time.monotonic()
+        if not obj.reloc and obj.bin not in ("center", side):
+            # cross-body carry (left arm -> right bin or vice versa): 0 successes in 26 tries over 7 eval runs, each
+            # failure cost 2.5-4 s of planning. Go straight to the hand-off.
+            obj.reloc, obj.tried = True, set()
         if not obj.reloc:
             plan = self.planner._plan_side_hints(obj.det, side, obj.bin, arm_q, hand_q)
             if not plan.ok:
@@ -470,7 +474,9 @@ class FastSortPolicy:
                 O = other.pts if len(other.qa) else np.empty((0,) + other.cmd_pts.shape)
                 O_last = other.pts[-1] if len(other.qa) else other.cmd_pts
                 other_ver, other_parked = other.version, not len(other.qa)
-            d, closest = self._find_delay(cut0, hold_pts, P, O, O_last)
+            # search past the other arm's whole queued timeline: with a 8 s cap a chained other arm (pick + next pick
+            # > 8 s) made this arm replan every 0.5 s for up to 8.5 s of sim time (17 "later"s in one DR episode)
+            d, closest = self._find_delay(cut0, hold_pts, P, O, O_last, max_delay=max(240, len(O) - cut0 + 30))
             self.lock.acquire()
             now = self.tick
             cut = cut0 - (now - now0)  # same absolute start tick as searched
