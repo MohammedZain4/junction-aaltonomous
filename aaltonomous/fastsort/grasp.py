@@ -66,6 +66,41 @@ class ShapePerception(Perception):
     # became phantom "yellow" objects: 13 in 8 DR scenes, all at or behind the bin row and 5.5-8.5 cm tall.
     bin_line_margin = 0.015   # m in front of the bins' near edge
 
+    # Reference hues (OpenCV H, 0-180) of each colour in the sim (scene.yaml RGB) and on the real head camera (Drop 0).
+    hue_prototypes = {"red": (0.0, 14.0), "yellow": (25.0, 43.0), "blue": (113.0, 111.0)}
+    dominant_frac = 0.7
+
+    def masks(self, rgb):
+        """Colour masks by BLOB, not by pixel: every pixel inside any configured colour range joins one mask, connected
+        blobs are labelled by their pixels' nearest reference hue (circular distance); a blob whose dominant colour has
+        >= dominant_frac of its pixels is assigned whole (a shaded yellow edge at H~20 stays yellow), otherwise it is
+        split per pixel (two different objects touching). Fixed per-pixel ranges cannot separate sim yellow (H 21-29
+        under DR) from real red (H 14) and the shaded edges of real yellow at the same time."""
+        import cv2
+        per_px = super().masks(rgb)
+        hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+        H = hsv[..., 0].astype(float)
+        names = list(self.hue_prototypes)
+        any_m = np.zeros(H.shape, np.uint8)
+        for m in per_px.values():
+            any_m |= m
+        protos = [np.asarray(self.hue_prototypes[c], float) for c in names]
+        dist = np.stack([np.min(np.minimum(np.abs(H[..., None] - p), 180 - np.abs(H[..., None] - p)), axis=-1)
+                         for p in protos])                      # (colours, h, w)
+        near = np.argmin(dist, axis=0)
+        out = {c: np.zeros(H.shape, np.uint8) for c in names}
+        n, lab = cv2.connectedComponents(any_m, connectivity=8)
+        for i in range(1, n):
+            sel = lab == i
+            counts = np.bincount(near[sel], minlength=len(names))
+            k = int(counts.argmax())
+            if counts[k] >= self.dominant_frac * counts.sum():
+                out[names[k]][sel] = 255
+            else:
+                for j, c in enumerate(names):
+                    out[c][sel & (near == j)] = 255
+        return out
+
     def _reject(self, det):
         why = super()._reject(det)
         if why is not None:
