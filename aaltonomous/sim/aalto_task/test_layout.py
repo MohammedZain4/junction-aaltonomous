@@ -61,7 +61,7 @@ class TestLayout(unittest.TestCase):
         in_left = sc.mat_to_pelvis((lo + hi) / 2 * np.array([1, 1, 0]) + [0, 0, 0.03])
         on_counter = sc.mat_to_pelvis([0.45, 0.15, sc.object_height() / 2])
         objs = [
-            {"name": "a", "color": "red", "shape": "cube", "active": True, "pos": in_left, "speed": 0.0},
+            {"name": "a", "color": "yellow", "shape": "cube", "active": True, "pos": in_left, "speed": 0.0},   # yellow -> left (real colours)
             {"name": "b", "color": "blue", "shape": "cube", "active": True, "pos": in_left, "speed": 0.0},
             {"name": "c", "color": "yellow", "shape": "cube", "active": True, "pos": on_counter, "speed": 0.0},
             {"name": "d", "color": "yellow", "shape": "cube", "active": False, "pos": [-0.6, 0, -0.7], "speed": 0.0},

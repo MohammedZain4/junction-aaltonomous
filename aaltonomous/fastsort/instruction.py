@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 COLORS = ("red", "yellow", "blue")
 SHAPES = ("cube", "cylinder", "triangle")
 BINS = ("left", "center", "right")
-FIXED_MAPPING = {"red": "left", "yellow": "center", "blue": "right"}
+# sort_fixed with the REAL colours (organisers, 2026-11-14): yellow -> left, purple -> center, orange -> right
+FIXED_MAPPING = {"red": "right", "yellow": "left", "blue": "center"}
 
 # --------------------------------------------------------------------------------------------- vocabulary
 _COLOR_WORDS = {

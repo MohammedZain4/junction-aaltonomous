@@ -52,8 +52,8 @@ class TestFrames(unittest.TestCase):
 
 class TestChecker(unittest.TestCase):
     def test_correct_wrong(self):
-        self.assertEqual(SC.classify_cube(in_bin("left"), 0.0, "red", FIXED), "correct")
-        self.assertEqual(SC.classify_cube(in_bin("right"), 0.0, "red", FIXED), "wrong")
+        self.assertEqual(SC.classify_cube(in_bin("right"), 0.0, "red", FIXED), "correct")   # orange -> right
+        self.assertEqual(SC.classify_cube(in_bin("left"), 0.0, "red", FIXED), "wrong")
 
     def test_moving_cube_not_counted(self):
         self.assertEqual(SC.classify_cube(in_bin("left"), 0.5, "red", FIXED), "counter")
@@ -102,7 +102,7 @@ class TestShapes(unittest.TestCase):
 
     def test_rung1_ignores_shape_rung2_by_shape_or_both(self):
         for shp in SHAPES:
-            self.assertEqual(SC.classify_cube(in_bin("left"), 0, "red", FIXED, shape=shp), "correct")
+            self.assertEqual(SC.classify_cube(in_bin("right"), 0, "red", FIXED, shape=shp), "correct")
         by_shape = {"cylinder": "left", "default": "right"}
         self.assertEqual(SC.classify_cube(in_bin("left"), 0, "blue", by_shape, shape="cylinder"), "correct")
         self.assertEqual(SC.classify_cube(in_bin("right"), 0, "blue", by_shape, shape="cube"), "correct")

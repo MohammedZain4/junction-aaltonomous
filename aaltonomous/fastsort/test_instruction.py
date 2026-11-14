@@ -84,8 +84,10 @@ PARAPHRASES = [
      M("center", "right", "left")),
     ("Take each red object and put it in the center bin. Then put each blue object in the right bin. Finally, the yellow ones go left.",
      M("center", "left", "right")),
-    ("The blue ones go where the red ones would normally go, the red ones go in the middle, and yellow goes right.",
-     M("center", "right", "left")),
+    ("The blue ones go where the red ones would normally go, the red ones go in the middle, and yellow goes left.",
+     M("center", "left", "right")),
+    ("Put the yellow objects in the left bin, the purple objects in the center bin and the orange objects in the right bin.",
+     M("right", "left", "center")),
     ("Put all the yellow and blue objects in the right bin and the red objects in the left bin.",
      M("left", "right", "right")),
     ("Swap the usual order: blue left, yellow center, red right.", M("right", "center", "left")),
@@ -104,8 +106,8 @@ PARAPHRASES = [
      M("left", "right", "center")),
     ("Put the purple objects in the left orange box, the orange objects in the right orange box and the yellow "
      "objects in the middle orange box.", M("right", "center", "left")),
-    ("", M("left", "center", "right")),
-    ("asdf qwerty", M("left", "center", "right")),
+    ("", M("right", "left", "center")),              # fallback = sort_fixed with the real colours
+    ("asdf qwerty", M("right", "left", "center")),
 ]
 
 

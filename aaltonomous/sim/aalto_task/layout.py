@@ -9,6 +9,8 @@ the rest are parked on the floor behind the robot (out of every camera view, out
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from aaltonomous.interface import tasks
@@ -50,6 +52,14 @@ def mat_yaw_to_pelvis(yaw):
     return -np.pi / 2 - float(yaw)
 
 
+def _qmul(a, b):
+    """Hamilton product of xyzw quaternions (a then b in the body frame: R(a) @ R(b))."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return np.array([aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+                     aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz])
+
+
 def park_pose(sc: Scene, i, n):
     """Pelvis-frame pose for parked object i of n: on the floor, in a row behind the robot."""
     y = (i - (n - 1) / 2) * 0.10
@@ -72,9 +82,15 @@ def assign(sc: Scene, layout):
         m = sc.cube_spawn_mat(ob)
         if "z" in ob:                                    # optional centre height (mat coords), e.g. drop tests
             m[2] = float(ob["z"])
+        q = yaw_quat_xyzw(mat_yaw_to_pelvis(ob.get("yaw", 0.0)))
+        if ob.get("lying") and shape == "triangle":
+            # prism on a rectangular side (organisers: prisms may lie on a face or a side): +90 deg about mesh x puts
+            # the base face (mesh y = -size/3 from the centroid) down and the apex edge up as a horizontal ridge
+            m[2] = sc.size / 3.0
+            q = _qmul(q, np.array([np.sin(np.pi / 4), 0.0, 0.0, np.cos(np.pi / 4)]))
         p = sc.mat_to_pelvis(m)
         p[2] += 0.001                                    # 1 mm drop so nothing starts interpenetrating the mat
-        poses[pick] = (p, yaw_quat_xyzw(mat_yaw_to_pelvis(ob.get("yaw", 0.0))))
+        poses[pick] = (p, q)
         active.append(pick)
     parked = [n for n in names if free[n]]
     for i, n in enumerate(parked):
@@ -84,7 +100,14 @@ def assign(sc: Scene, layout):
 
 def random_layout(sc: Scene, seed=None):
     rng = np.random.default_rng(seed)
-    return tasks.sample_layout(rng, shapes=tuple(sc.cfg["objects"]["shapes"]), **sc.layout_kwargs())
+    lay = tasks.sample_layout(rng, shapes=tuple(sc.cfg["objects"]["shapes"]), **sc.layout_kwargs())
+    p_lying = float(os.environ.get("AALTO_LYING_P", "0"))   # (our test switch) share of prisms lying on a side
+    if p_lying > 0:
+        r2 = np.random.default_rng(None if seed is None else seed + 7919)
+        for ob in lay:
+            if ob.get("shape") == "triangle" and r2.random() < p_lying:
+                ob["lying"] = True
+    return lay
 
 
 def parse_mapping(mapping):

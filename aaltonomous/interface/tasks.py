@@ -11,9 +11,11 @@ COLORS = ("red", "yellow", "blue")
 SHAPES = ("cube", "cylinder", "triangle")  # extruded square, circle, equilateral triangle (spec §2)
 BINS = ("left", "center", "right")
 # Bins are identical (orange), named only by position. Rung 1 uses this fixed colour -> bin mapping.
-FIXED_MAPPING = {"red": "left", "yellow": "center", "blue": "right"}
-FIXED_INSTRUCTION = ("Put the red objects in the left bin, the yellow objects in the center bin "
-                     "and the blue objects in the right bin.")
+# Organisers 2026-11-14: sort_fixed uses the real colours, yellow -> left, purple (sim "blue") -> center,
+# orange (sim "red") -> right.
+FIXED_MAPPING = {"red": "right", "yellow": "left", "blue": "center"}
+FIXED_INSTRUCTION = ("Put the yellow objects in the left bin, the blue objects in the center bin "
+                     "and the red objects in the right bin.")
 INSERT_INSTRUCTION = "Put each object through the hole of the same shape in the lid."
 
 # Training templates for sort_language. {c0..c2} colours, {b0..b2} bin positions (bins are never named by colour).

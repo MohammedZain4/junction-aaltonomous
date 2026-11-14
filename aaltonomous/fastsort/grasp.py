@@ -20,6 +20,7 @@ import numpy as np
 from aaltonomous.baselines.classical.perception import Perception
 from aaltonomous.baselines.classical.planner import Planner
 
+RIDGE_MIN_LEN, RIDGE_MAX_WIDTH, RIDGE_ASPECT = 0.030, 0.022, 2.2   # top band of a lying prism: long thin strip
 SQUARE_MIN, TRIANGLE_MAX = 0.88, 0.68     # hull/rect area ratio thresholds (DR bench medians: triangle 0.60, cylinder 0.80, cube 0.95)
 
 
@@ -46,6 +47,14 @@ def classify_top(xy):
     if a_rect <= 1e-8 or a_hull <= 1e-8:
         return None, []
     r = a_hull / a_rect
+    lo, hi = sorted((float(w), float(h)))
+    if hi >= RIDGE_MIN_LEN and lo <= RIDGE_MAX_WIDTH and hi >= RIDGE_ASPECT * max(lo, 1e-6):
+        # a triangular prism LYING on a rectangular side (organisers: prisms may lie on a face or a side): from above
+        # it is a ~52 x 45 mm rectangle as tall as a cube, but its top is a ridge, so the top band is a thin strip.
+        # Pinch along the ridge: the two triangular end faces are parallel (45 mm apart).
+        t = np.radians(ang)
+        ax = np.array([np.cos(t), np.sin(t)]) if float(w) >= float(h) else np.array([-np.sin(t), np.cos(t)])
+        return "triangle", [ax]
     if r >= SQUARE_MIN:
         t = np.radians(ang)
         axes = [np.array([np.cos(t), np.sin(t)]), np.array([-np.sin(t), np.cos(t)])]

@@ -71,6 +71,26 @@ class TestClassify(unittest.TestCase):
             for i in range(3):  # default pinch axes: parallel to each side
                 self.assertTrue(axis_close(axes, V[(i + 1) % 3] - V[i]), (deg, i, axes))
 
+    def test_lying_prism_ridge(self):
+        # prism on its side: the top band (6 mm under the ridge, roof slope ~1.7) is a ~45 x 9 mm strip along the ridge
+        for deg in (0, 30, -55, 90):
+            t = np.radians(deg)
+            R = rot(-t)
+
+            def inside(P):
+                Q = P @ R.T
+                return (np.abs(Q[:, 0]) <= S / 2) & (np.abs(Q[:, 1]) <= 0.0045)
+            shape, axes = classify_top(grid(inside, n=120))
+            self.assertEqual(shape, "triangle", deg)
+            self.assertEqual(len(axes), 1)
+            self.assertTrue(axis_close(axes, [np.cos(t), np.sin(t)]), (deg, axes))   # pinch the two end faces
+
+    def test_partial_cube_is_not_a_ridge(self):
+        # a cube top half hidden (e.g. by an arm) is a 45 x 22 mm rectangle: aspect ~2 -> still a cube
+        def inside(P):
+            return (np.abs(P[:, 0]) <= S / 2) & (P[:, 1] >= 0) & (P[:, 1] <= S / 2)
+        self.assertEqual(classify_top(grid(inside))[0], "cube")
+
     def test_too_few_points(self):
         self.assertEqual(classify_top(np.zeros((5, 2))), (None, []))
 
