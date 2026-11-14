@@ -9,8 +9,6 @@ the rest are parked on the floor behind the robot (out of every camera view, out
 """
 from __future__ import annotations
 
-import os
-
 import numpy as np
 
 from aaltonomous.interface import tasks
@@ -100,14 +98,7 @@ def assign(sc: Scene, layout):
 
 def random_layout(sc: Scene, seed=None):
     rng = np.random.default_rng(seed)
-    lay = tasks.sample_layout(rng, shapes=tuple(sc.cfg["objects"]["shapes"]), **sc.layout_kwargs())
-    p_lying = float(os.environ.get("AALTO_LYING_P", "0"))   # (our test switch) share of prisms lying on a side
-    if p_lying > 0:
-        r2 = np.random.default_rng(None if seed is None else seed + 7919)
-        for ob in lay:
-            if ob.get("shape") == "triangle" and r2.random() < p_lying:
-                ob["lying"] = True
-    return lay
+    return tasks.sample_layout(rng, shapes=tuple(sc.cfg["objects"]["shapes"]), **sc.layout_kwargs())
 
 
 def parse_mapping(mapping):

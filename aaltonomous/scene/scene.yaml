@@ -31,7 +31,8 @@ objects:                                      # 3 shapes x 3 colours = 9 types (
   fillet: 0.0025                              # 2-3 mm on all edges; triangle tips rounded with the same radius
   shapes: [cube, cylinder, triangle]          # extruded square / circle / equilateral triangle prism
   colors:                                     # matte PLA; RGB used in sim (0-255)
-    red: [240, 120, 20]                       # real objects are ORANGE (head cam H~13); name stays 'red'
+    red: [240, 50, 8]                         # real objects are ORANGE (head cam H~13); name stays 'red'.
+                                              # Isaac treats these as LINEAR rgb: [240,120,20] rendered at H~22 = yellow
     yellow: [235, 200, 20]
     blue: [110, 90, 220]                      # real objects are PURPLE (head cam H~111-127); name stays 'blue'
   copies_per_type: 2                          # 18 objects in total
@@ -50,7 +51,7 @@ bins:
   wall_height: 0.06                           # (default) measure the real box
   wall_thickness: 0.003                       # (default) measure the real box
   floor_thickness: 0.003
-  rgb: [225, 65, 35]                          # (default) orange, same for all boxes; take from a venue photo.
+  rgb: [225, 30, 25]                          # (default) orange, same for all boxes; take from a venue photo.
                                               # NOT an object colour: objects.colors defines the object types.
   # Centres in mat coordinates: pelvis x = 0.40 + B/2, pelvis y = 0, +-(B + 0.05); x_mat = y_pelvis + 0.45,
   # y_mat = x_pelvis - 0.14. In the pelvis frame: left (0.505, +0.26) r=0.57, center (0.505, 0) r=0.505,

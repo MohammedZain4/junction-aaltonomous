@@ -5,6 +5,8 @@ Held-out (finals) instruction templates are deliberately NOT in this file.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 COLORS = ("red", "yellow", "blue")
@@ -81,6 +83,12 @@ def sample_layout(rng, n_min=3, n_max=6, region=((0.20, 0.60), (0.10, 0.22)), mi
         if len(cubes) == len(colors):
             for c in cubes:
                 c["shape"] = str(shapes[int(rng.integers(len(shapes)))])
+            p_lying = float(os.environ.get("AALTO_LYING_P", "0"))   # (test switch) prisms lying on a side
+            if p_lying > 0:
+                r2 = np.random.default_rng(int(rng.integers(1 << 31)))
+                for c in cubes:
+                    if c["shape"] == "triangle" and r2.random() < p_lying:
+                        c["lying"] = True
             return cubes
     raise RuntimeError("could not place cubes with the requested spacing")
 

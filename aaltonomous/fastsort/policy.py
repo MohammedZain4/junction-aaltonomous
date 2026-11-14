@@ -789,6 +789,20 @@ class FastSortPolicy:
                     obj.not_before = now + 15
                     self._note(self._t(), f"{side}: {obj.det.color} would collide with the other arm ({why}): later")
                 return False
+            wait = d - d0
+            if use_chain and wait > self.max_wait_chain and not other_parked:
+                # a chained arm waits at its chain point (over a bin, mid-workspace) where it blocks the other arm
+                # (seed 2005: 40 s of "would collide ... later"): go home first, plan from there
+                obj.not_before = (lane.chain_abs or now) + 2
+                self._note(self._t(), f"{side}: {obj.det.color} would wait {wait / HZ:.1f}s at the chain point: "
+                                      f"after the home move")
+                return False
+            if wait > self.max_wait and not other_parked:
+                # a reservation far in the future pushes the other arm's next plans back too (28 s + 38 s snowball,
+                # seed 2005): try again when the timeline has moved on
+                obj.not_before = now + max(15, (wait - self.max_wait) // 2)
+                self._note(self._t(), f"{side}: {obj.det.color} would wait {wait / HZ:.1f}s: later")
+                return False
             t_end = (now + cut + d + len(A)) / HZ
             if t_end > self.time_limit - 0.5:
                 self.failed.append(obj.xy)
@@ -821,6 +835,9 @@ class FastSortPolicy:
         self._note(self._t(), f"{side}: {obj.det.color} {what}  start +{(cut + d) / HZ:.1f}s (delay {d / HZ:.1f}s, "
                               f"{'chained' if use_chain else 'from tail'}), {len(A) / HZ:.1f}s, planned in {dt_plan:.2f}s")
         return True
+
+    max_wait_chain = 60    # ticks (2 s): longest wait accepted at a chain point
+    max_wait = 180         # ticks (6 s): longest wait accepted for any new plan
 
     def _find_delay(self, cut, hold_pts, P, O, O_last, max_delay=240, step=3, d_min=0):
         """Smallest d (ticks) such that [hold d ticks] + P, starting `cut` ticks from now, keeps every point >=
