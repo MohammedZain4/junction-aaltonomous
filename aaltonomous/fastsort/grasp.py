@@ -167,7 +167,22 @@ class ShapePerception(Perception):
             det.shape_ratio = hull_rect_ratio(top[:, :2])
         except Exception:
             det.shape, det.grasp_axes, det.shape_ratio = None, [], None
+        b = self.xy_bias(det.shape)
+        if b is not None:
+            det.top = np.r_[det.top[:2] - b, det.top[2:]]
         return det
+
+    def xy_bias(self, shape):
+        """Systematic top-centroid error (detected - true, m) to subtract, per perceived shape ("all" = fallback).
+        From config `shape_xy_bias` or env AALTO_XY_BIAS="all:dx,dy;triangle:dx,dy" (mm, for benchmarking)."""
+        if not hasattr(self, "_xy_bias"):
+            tbl = {k: np.asarray(v, float) for k, v in (self.cfg.get("shape_xy_bias") or {}).items()}
+            env = os.environ.get("AALTO_XY_BIAS", "").strip()
+            for part in filter(None, env.split(";")):
+                k, v = part.split(":")
+                tbl[k.strip()] = np.asarray([float(x) for x in v.split(",")], float) / 1000.0
+            self._xy_bias = tbl
+        return self._xy_bias.get(shape, self._xy_bias.get("all"))
 
 
 class ShapePlanner(Planner):
