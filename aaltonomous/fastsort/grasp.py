@@ -70,6 +70,8 @@ def classify_top(xy):
         for i in range(3):
             if mode == "altitude":   # flat side <-> opposite vertex: tested in sim, the vertex slips (1/4)
                 v = 0.5 * (tri[(i + 1) % 3] + tri[(i + 2) % 3]) - tri[i]
+            elif mode == "tripod":   # finger direction TOWARDS a vertex: the two fingers straddle that apex edge, the
+                v = tri[i] - tri.mean(0)  # thumb pushes the opposite flat face (3 contacts; ShapePlanner centres it)
             else:                    # parallel to a side: both contacts on the two sloped faces, symmetric
                 v = tri[(i + 2) % 3] - tri[(i + 1) % 3]
             n = np.linalg.norm(v)
@@ -159,6 +161,9 @@ class ShapePerception(Perception):
             z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
             top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
             det.shape, det.grasp_axes = classify_top(top[:, :2])
+            # tripod prism grasp: the axes are DIRECTED (fingers towards the apex), not reversible pinch axes
+            det.axes_directed = (det.shape == "triangle" and len(det.grasp_axes) == 3
+                                 and os.environ.get("AALTO_TRI_AXIS", "side") == "tripod")
             det.shape_ratio = hull_rect_ratio(top[:, :2])
         except Exception:
             det.shape, det.grasp_axes, det.shape_ratio = None, [], None
@@ -191,11 +196,17 @@ class ShapePlanner(Planner):
         """Object pinch axes as finger directions: sign chosen to point forward (fingers can't point back at the
         robot); ordered by closeness to the arm's natural direction (forward, a little inward)."""
         axes = getattr(det, "grasp_axes", None) or []
+        directed = bool(getattr(det, "axes_directed", False))
         natural = np.array([1.0, -0.4 if side == "left" else 0.4])
         natural /= np.linalg.norm(natural)
         out = []
         for a in axes:
             a = np.asarray(a, float)
+            if directed:
+                if a[0] < -0.2:   # this apex points back at the robot: the fingers can't come from there
+                    continue
+                out.append(a)
+                continue
             if a[0] < 0 or (abs(a[0]) < 1e-6 and (a[1] > 0) == (side == "left")):
                 a = -a
             if a[0] < -0.2:  # pointing back at the robot even after the flip: unreachable
@@ -224,8 +235,11 @@ class ShapePlanner(Planner):
             axes = axes[k % len(axes):] + axes[:k % len(axes)]
         if axes:
             saved_h, saved_w = self.kin.hint, self.kin.w_hint
+            saved_off = self.kin.offset[side].copy()
             try:
                 self.kin.w_hint = self.axis_hint_weight
+                if getattr(det, "axes_directed", False):
+                    self.kin.offset[side] = saved_off * np.array([1.0, 1.0, 0.0])   # centred between the fingers
                 for a in axes[:2]:  # best two: a failing plan per axis costs ~1-4 s of IK
                     self.kin.hint = np.r_[a, 0.0]
                     p = self._plan_side(det, side, bin_name, arm_q, hand_q, **kw)
@@ -236,4 +250,5 @@ class ShapePlanner(Planner):
                             return p
             finally:
                 self.kin.hint, self.kin.w_hint = saved_h, saved_w
+                self.kin.offset[side] = saved_off
         return super()._plan_side_hints(det, side, bin_name, arm_q, hand_q, **kw)
