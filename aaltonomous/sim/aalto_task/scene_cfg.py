@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import os
+
 import numpy as np
 import yaml
 
@@ -262,6 +264,43 @@ def head_camera_cfg():
     )
 
 
+def show_enabled():
+    """Third-person 'show' camera for demo videos: env AALTO_SHOW_CAM=1 or the flag file /data/SHOW_CAM (so it
+    can be switched on with a docker restart, no compose change). Off by default: it costs render time."""
+    return bool(os.environ.get("AALTO_SHOW_CAM")) or os.path.exists("/data/SHOW_CAM")
+
+
+# eye / target in the pelvis frame (x forward to the counter, y left, z up); override with AALTO_SHOW_POSE="ex,ey,ez,tx,ty,tz"
+SHOW_POSE = (1.30, 0.95, 0.60, 0.22, 0.0, -0.02)
+SHOW_RES = (1280, 720)
+
+
+def look_at_quat(eye, target):
+    """Camera orientation (Isaac Lab 'world' convention: forward +x, up +z) looking from eye at target."""
+    f = np.asarray(target, float) - np.asarray(eye, float)
+    f /= np.linalg.norm(f)
+    l = np.cross([0.0, 0.0, 1.0], f)
+    l /= np.linalg.norm(l)
+    u = np.cross(f, l)
+    return rotmat_to_quat_xyzw(np.stack([f, l, u], axis=1))
+
+
+def show_camera_cfg():
+    pose = SHOW_POSE
+    if os.environ.get("AALTO_SHOW_POSE"):
+        pose = tuple(float(v) for v in os.environ["AALTO_SHOW_POSE"].split(","))
+    eye, tgt = pose[:3], pose[3:]
+    w, h = SHOW_RES
+    return CameraCfg(
+        prim_path=f"{ENV}/ShowCam",
+        update_period=1.0 / 30,
+        height=h, width=w,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(focal_length=18.0, horizontal_aperture=20.955, clipping_range=(0.05, 20.0)),
+        offset=CameraCfg.OffsetCfg(pos=_w(eye), rot=look_at_quat(eye, tgt), convention="world"),
+    )
+
+
 def _robot_cfg():
     cfg = G1RobotPresets.g1_29dof_dex3_base_fix(init_pos=tuple(float(v) for v in PELVIS_W),
                                                 init_rot=(0.0, 0.0, 0.0, 1.0))
@@ -296,6 +335,8 @@ def _fixed_cfgs():
 def make_scene_cfg_class(name="AaltoSceneCfg", lid=False):
     """InteractiveSceneCfg subclass with every entity as a dataclass field (InteractiveScene reads fields only)."""
     attrs = {**_fixed_cfgs(), **bin_cfgs(), **object_cfgs()}
+    if show_enabled():
+        attrs["show_camera"] = show_camera_cfg()
     if lid:
         attrs["lid"] = lid_cfg()
     ns = dict(attrs)

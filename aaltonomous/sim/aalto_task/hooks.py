@@ -126,6 +126,13 @@ class AaltoRuntime:
         cmd = req.get("cmd")
         if cmd == "ping":
             return {"ok": True, "t": time.time(), **self.clock_info()}
+        if "show_camera" in env.scene.keys() and cmd in ("reset", "reset_random", "evaluate"):
+            # one clip per episode: from the layout reset to the final scoring (the empty reset that parks the
+            # objects for the arm-homing phase only closes the clip)
+            if cmd == "reset_random" or (cmd == "reset" and req.get("layout")):
+                self._show_new_file()
+            else:
+                self._show_close()
         if cmd == "reset":
             return {"ok": True, "active": self.place(env, req["layout"]), "layout": req["layout"]}
         if cmd == "info":
@@ -185,6 +192,49 @@ class AaltoRuntime:
                 self.rep.send(json.dumps(resp).encode())
         if self.rgbd is not None:
             self._publish_rgbd(env)
+        if "show_camera" in env.scene.keys():
+            try:
+                self._record_show(env)
+            except Exception as e:  # a demo camera must never take the sim down
+                if not getattr(self, "_show_err", None):
+                    print(f"[aalto] show camera: {type(e).__name__}: {e}", flush=True)
+                self._show_err = e
+
+    # ------------------------------------------------------------------ third-person demo video
+    def _show_new_file(self):
+        """Start a new show video (called on every scene reset = one file per episode)."""
+        self._show_close()
+        self._show_k = getattr(self, "_show_k", 0) + 1
+        self._show_path = os.path.join(os.environ.get("AALTO_SHOW_DIR", "/data/show"),
+                                       time.strftime("show_%Y%m%d_%H%M%S") + f"_{self._show_k:03d}" + ".mp4")
+        self._show_vw = None
+
+    def _show_close(self):
+        vw = getattr(self, "_show_vw", None)
+        if vw is not None:
+            vw.release()
+            print(f"[aalto] show video saved {self._show_path} ({self._show_n} frames)", flush=True)
+        self._show_vw = None
+        self._show_path = None
+
+    def _record_show(self, env):
+        from tasks.common_observations.camera_state import _camera_frame
+        if not getattr(self, "_show_path", None):
+            return                                  # nothing until the first reset
+        cam = env.scene["show_camera"]
+        frame = _camera_frame(cam)
+        if frame is not None and frame == getattr(self, "_show_last", None):
+            return
+        self._show_last = frame
+        rgb = _t(cam.data.output["rgb"])[0, ..., :3].cpu().numpy().astype(np.uint8)
+        import cv2
+        if self._show_vw is None:
+            os.makedirs(os.path.dirname(self._show_path), exist_ok=True)
+            h, w = rgb.shape[:2]
+            self._show_vw = cv2.VideoWriter(self._show_path, cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (w, h))
+            self._show_n = 0
+        self._show_vw.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        self._show_n += 1
 
     def _publish_rgbd(self, env):
         from tasks.common_observations.camera_state import _camera_frame
