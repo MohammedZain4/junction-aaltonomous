@@ -95,7 +95,7 @@ class Obj:
         return np.asarray(self.det.top[:2], float)
 
 
-@dataclass
+@dataclass(eq=False)  # identity: list.remove() on plans must not compare numpy fields
 class LanePlan:
     obj: Obj
     start: int                      # absolute tick
@@ -556,11 +556,11 @@ class FastSortPolicy:
             p.end = now + d + len(A)
             for q in later:
                 lane.plans.remove(q)
-                try:
-                    self.attempts.remove(next(a for a in self.attempts if a[0] is q.obj.xy or
-                                              (np.allclose(a[0], q.obj.xy) and a[1] == side)))
-                except StopIteration:
-                    pass
+                # by index: list.remove() compares tuples holding numpy arrays -> "truth value ... ambiguous"
+                idx = next((i for i, a in enumerate(self.attempts) if a[0] is q.obj.xy or
+                            (np.allclose(a[0], q.obj.xy) and a[1] == side)), None)
+                if idx is not None:
+                    del self.attempts[idx]
             lane.version += 1
         self._note(self._t(), f"{side}: EMPTY HAND after lift -> abort {p.obj.det.color}, home now (delay {d / HZ:.1f}s)"
                               + (f", dropped {len(later)} queued pick(s)" if later else ""))
