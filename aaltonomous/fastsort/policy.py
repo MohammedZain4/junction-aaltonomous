@@ -66,7 +66,7 @@ def _lower_thread_priority(nice=10):
         pass
 
 
-@dataclass
+@dataclass(eq=False)  # identity comparison: field-wise __eq__ compares numpy arrays and raises
 class Obj:
     det: object
     bin: str
@@ -248,13 +248,12 @@ class FastSortPolicy:
                 worked = self._brain_step()
                 errors = 0
             except Exception:
+                # Never end the episode over a bug: log (once per streak), back off, keep trying. The arms just hold.
                 errors += 1
-                self.log("[fastsort] brain error: " + traceback.format_exc())
-                worked = False
-                if errors > 20:
-                    with self.lock:
-                        self.finished = True
-                    return
+                if errors == 1 or errors % 100 == 0:
+                    self.log(f"[fastsort] brain error (x{errors}): " + traceback.format_exc())
+                time.sleep(0.05)
+                worked = True
             if not worked:
                 time.sleep(0.005)
 
