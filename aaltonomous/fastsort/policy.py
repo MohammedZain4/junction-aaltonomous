@@ -19,6 +19,7 @@ differently:
 """
 from __future__ import annotations
 
+import collections
 import os
 import sys
 import threading
@@ -38,6 +39,7 @@ from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene
 
 from .instruction import parse_instruction
+from .wristcheck import fmt as grip_fmt, grip_features
 
 HZ = 30.0
 SIDES = ("left", "right")
@@ -99,6 +101,9 @@ class LanePlan:
     start: int                      # absolute tick
     end: int
     grasp_xy: np.ndarray
+    phases: dict = field(default_factory=dict)   # name -> (absolute start tick, absolute end tick)
+    hand_closed: np.ndarray | None = None        # commanded 7 hand joints at the end of "close"
+    checked: bool = False                        # grip check done
 
 
 class Lane:
@@ -177,6 +182,8 @@ class FastSortPolicy:
         self.finished = False
         self.latest_obs = None
         self.latest_obs_tick = -1
+        self.obs_hist = collections.deque(maxlen=8)   # (tick, obs) of the last act() calls (~0.5 s apart)
+        self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "log")   # log | 0 (off); act: after calibration
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
         self.last_look_obs_tick = -1
@@ -203,6 +210,7 @@ class FastSortPolicy:
             self._start(obs)
         with self.lock:
             self.latest_obs, self.latest_obs_tick = obs, self.tick
+            self.obs_hist.append((self.tick, obs))
             if self.finished:
                 return self._pack(1, done=True)
             busy = any(len(l.qa) for l in self.lanes.values())
@@ -315,6 +323,10 @@ class FastSortPolicy:
         if self.pool is None:
             return False
 
+        # ---------------- grip check at the end of each lift (log only until the thresholds are fitted)
+        if self.grip_mode != "0" and self._grip_check(obs, obs_tick):
+            return True
+
         # ---------------- plan (the lane with less queued work first)
         order = sorted(SIDES, key=lambda s: len(self.lanes[s].qa))
         for s in order:
@@ -330,6 +342,33 @@ class FastSortPolicy:
                 self.pool.append(obj)
             return True
         return False
+
+    def _grip_check(self, obs, obs_tick):
+        """Once per pick, on the first observation at/after the end of its lift: measure finger tracking error and the
+        wrist-camera colour blob (fastsort.wristcheck), compared with an observation early in the lift."""
+        did = False
+        for side, lane in self.lanes.items():
+            for p in list(lane.plans):
+                if p.checked or "lift" not in p.phases or p.hand_closed is None:
+                    continue
+                ls, le = p.phases["lift"]
+                if obs_tick < le - 3:
+                    continue
+                p.checked = True
+                if obs_tick > le + 20:   # observation came too late (missed chunk): skip
+                    continue
+                with self.lock:
+                    prev = next((o for t, o in reversed(self.obs_hist) if ls - 10 <= t <= le - 12), None)
+                try:
+                    f = grip_features(self.perception, p.obj.det.color, np.asarray(obs["hand_q"], float)[lane.sl],
+                                      p.hand_closed, obs.get(f"{side}_wrist_rgb"),
+                                      None if prev is None else prev.get(f"{side}_wrist_rgb"))
+                    self._note(self._t(), f"{side}: grip check {p.obj.det.color} "
+                                          f"{getattr(p.obj.det, 'shape', None) or '?'} at {p.obj.xy.round(3)}: {grip_fmt(f)}")
+                except Exception as e:
+                    self._note(self._t(), f"{side}: grip check failed: {e!r}")
+                did = True
+        return did
 
     def _is_failed(self, xy):
         return any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed)
@@ -548,7 +587,10 @@ class FastSortPolicy:
                 if p.start < now + cut < p.end:
                     p.end = now + cut
             gxy = np.asarray(plan.waypoints.get("grasp", np.r_[obj.xy, 0.0])[:2], float)
-            lane.plans.append(LanePlan(obj, start_abs, now + cut + d + len(A), gxy))
+            ph = {name: (start_abs + s, start_abs + e) for name, s, e in plan.phases}
+            ce = next((e for name, s, e in plan.phases if name == "close"), None)
+            lane.plans.append(LanePlan(obj, start_abs, now + cut + d + len(A), gxy, ph,
+                                       None if ce is None else H[ce - 1].copy()))
             lane.version += 1
             self.attempts.append((obj.xy, side, obj.det.color, plan.target_bin == "counter"))
         finally:
