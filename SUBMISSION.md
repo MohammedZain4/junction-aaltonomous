@@ -4,9 +4,9 @@ Deadline: **Sun 2026-11-15 10:00**. Partners judge the digital materials; peer r
 
 | Field | What we hand in | Status |
 |---|---|---|
-| Demo (digital) | Sim evaluation clips + the Docker policy server (`docker/fastsort.Dockerfile`, image `fastsort:v5`) | rebuild v5 after the final fixes |
+| Demo (digital) | Sim evaluation clips + the Docker policy server (`docker/fastsort.Dockerfile`, image `fastsort:v6`, built from commit 1504c4a) | v6 built; end-to-end check queued (`/root/q_v6.sh`) |
 | Source code | GitHub repo (make it **public** before submitting) | private now |
-| Video (max 2 min) | Demo reel (`/root/make_demo.sh`, draft 53 s) | redo: the draft "wasn't great" |
+| Video (max 2 min) | Demo reel v2 (`scripts/make_demo.sh`, 38 s, `fastsort_demo_v2.mp4`) | to review together |
 | Team info | Solo entry, filled in by hand on the platform | to do (you) |
 | Project description | The text below | draft ready |
 
@@ -23,7 +23,8 @@ free-form spoken-style instruction. It ships as a single CPU-only Docker policy 
   colliding. That gives about twice the throughput of a one-arm sorter.
 - **Understands instructions.** It handles any phrasing, including synonyms, typos, "the rest", "except",
   "respectively" and "my left". It follows rules by colour, by shape or by both, in English, Finnish, Swedish and
-  German. It was tested on all 288 official templates plus 50+ unseen paraphrases.
+  German. It was tested on all 288 official templates plus 50+ unseen paraphrases. A shape-insertion ("through the hole in
+  the lid") instruction is recognised and the objects are left in place rather than dropped in the wrong bins.
 - **Shape-aware grasping.** The head camera's depth image gives each object's top face and shape. Prisms lying on
   their side are still recognised, from the ridge on top. The grasp axis is chosen per shape.
 - **Checks itself.** At the first look, it calibrates the camera against the known bin walls, which cut position
