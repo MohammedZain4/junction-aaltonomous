@@ -185,7 +185,7 @@ def evaluate(a):
             dr = None
             if sim_info.get("dr"):
                 dr = sc.call(cmd="randomize", seed=seed).get("params")
-            rec = Recorder(out_dir / f"episode_{i:03d}")
+            rec = Recorder(out_dir / f"episode_{i:03d}", video=bool(os.environ.get("AALTO_EVAL_VIDEO")))  # 30 fps head view = real-time replay
             t0 = time.monotonic()
             try:
                 summary, events = run_episode(env, client, i, seed, rec, stop, a.task)
