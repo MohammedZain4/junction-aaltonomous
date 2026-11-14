@@ -28,7 +28,14 @@ RUN bash aaltonomous/cloud/setup_instance.sh prereq && bash aaltonomous/cloud/se
 RUN bash aaltonomous/cloud/setup_instance.sh torch
 RUN bash aaltonomous/cloud/setup_instance.sh isaacsim kit
 RUN bash aaltonomous/cloud/setup_instance.sh isaacsim rest
-RUN bash aaltonomous/cloud/setup_instance.sh isaaclab
+# Isaac Lab with only the extras the pinned env actually has: the default "all" also pulls rl-games (needs
+# psutil<6) and visualizer[rerun] (needs rerun-sdk>=0.29), neither of which is in isaac-constraints.txt.
+# Patched here (not in setup_instance.sh) so the cached layers above stay valid.
+RUN sed -i 's/^psutil==.*/psutil==5.9.8/' aaltonomous/cloud/isaac-constraints.txt && \
+    sed -i 's#./isaaclab.sh --install)#./isaaclab.sh --install "mimic,teleop,newton,rl[rsl-rl],rl[skrl],rl[sb3],visualizer[kit],visualizer[viser]")#' \
+        aaltonomous/cloud/setup_instance.sh && \
+    grep -q 'visualizer\[viser\]' aaltonomous/cloud/setup_instance.sh && \
+    bash aaltonomous/cloud/setup_instance.sh isaaclab
 RUN bash aaltonomous/cloud/setup_instance.sh cyclonedds && bash aaltonomous/cloud/setup_instance.sh repos
 RUN bash aaltonomous/cloud/setup_instance.sh assets
 COPY aaltonomous aaltonomous
