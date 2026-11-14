@@ -112,6 +112,13 @@ PARAPHRASES = [
 
 
 class TestTemplates(unittest.TestCase):
+    def test_insert_shapes_leaves_objects(self):
+        r = parse_instruction("Put each object through the hole of the same shape in the lid.")
+        self.assertEqual(r.source, "insert_shapes")
+        self.assertEqual({c: r.bin_for(c, s) for c in ("red", "yellow", "blue") for s in ("cube", None)},
+                         {"red": None, "yellow": None, "blue": None})
+        self.assertNotEqual(parse_instruction("Put the red objects in the left bin.").source, "insert_shapes")
+
     def test_all_training_templates_all_permutations(self):
         bad = []
         for tpl in _templates():

@@ -342,6 +342,17 @@ def parse_instruction(text: str | None) -> Rules:
         r.notes.append("empty instruction")
         return r
 
+    # rung 3 (insert_shapes): "Put each object through the hole of the same shape in the lid." Sorting into bins
+    # scores 0 there and anything dropped on/beside the lid -1 (the lid sits on a bin), so the safe answer is to
+    # leave every object where it is (score 0) instead of falling back to the fixed colour mapping.
+    if re.search(r"\b(lid|holes?|insert\w*|through the)\b", text.lower()) and not re.search(
+            r"\b(bin|box|left|right|cent(er|re)|middle)\b", text.lower()):
+        r.rules = {(None, None): None}
+        r.prio = {(None, None): P_COLOR}
+        r.source = "insert_shapes"
+        r.notes.append("shape-insertion task: not attempted, objects left in place")
+        return r
+
     flip = bool(re.search(r"\b(my|viewer'?s?|audience'?s?|camera'?s?|observer'?s?) (left|right|perspective|point of view|view|side)\b"
                           r"|\bfrom (my|the viewer'?s?|the front|the audience'?s?) (perspective|point of view|view|side)\b"
                           r"|\bfacing the robot\b", text.lower()))
