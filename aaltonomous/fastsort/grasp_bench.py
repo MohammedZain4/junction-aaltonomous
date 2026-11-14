@@ -55,6 +55,8 @@ def main(argv=None):
     ap.add_argument("--wrist-out", default="/tmp/grip_features.jsonl")
     ap.add_argument("--true-xy", action="store_true", help="grasp at the TRUE object xy (sim state) instead of the "
                     "perceived one; shape, axes and colour stay perceived. Answers: are misses position errors?")
+    ap.add_argument("--shapes", default=None, help="only pick these perceived shapes, e.g. triangle (comma list); "
+                    "scoring still covers every object, so read the BY SHAPE line")
     ap.add_argument("--ov", action="append", default=[], help="config override key=JSON, e.g. "
                     "grasp.point_in_palm=[0.099,-0.084,0.0] (repeatable)")
     a = ap.parse_args(argv)
@@ -105,6 +107,8 @@ def main(argv=None):
             print(f"  seed {s}: true xy used, perceived error {np.round(errs, 1).tolist()} mm")
         tried = 0
         for d in sorted(dets, key=lambda d: np.linalg.norm(d.top[:2] - pl.drop_xy(FIXED_MAPPING[d.color]))):
+            if a.shapes and getattr(d, "shape", None) not in a.shapes.split(","):
+                continue
             b = FIXED_MAPPING[d.color]
             by = pl.bin_xy(b)[1]
             side = ("left" if by > 0 else "right") if abs(by) > 0.1 else ("left" if d.top[1] > 0 else "right")
