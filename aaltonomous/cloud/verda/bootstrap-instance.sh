@@ -49,8 +49,14 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
+# Verda's Docker images already ship docker-ce + containerd.io (conflicts with Ubuntu's docker.io/containerd).
+DOCKER_PKGS="docker-buildx docker-compose-v2 docker.io"
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
+  DOCKER_PKGS=""
+fi
+# shellcheck disable=SC2086
 apt-get install -y --no-install-recommends \
-  ca-certificates curl docker-buildx docker-compose-v2 docker.io gnupg iproute2 make \
+  ca-certificates curl ${DOCKER_PKGS} gnupg iproute2 make \
   openbox python3 rsync ufw x11-utils x11vnc xauth \
   xserver-xorg-core xserver-xorg-input-libinput
 
