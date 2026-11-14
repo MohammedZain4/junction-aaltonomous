@@ -15,11 +15,18 @@ no GPU. Real-robot data was used only to tune and check the perception.
 | **Both arms at once.** Each arm has its own queue of moves. Before any move is committed, the complete future paths of both arms (palm, fingers, fingertips, wrist, elbow) are checked against each other, and one arm is delayed only if they would come within 7.5 cm. | About twice the throughput of one arm at a time. Episodes typically finish in 20–60 s of the 120 s budget. |
 | **Chaining.** An arm goes straight from one drop to its next pick, without returning home. Planning runs in a background thread, so the robot never waits for the planner between picks. | No dead time between picks. |
 | **Free-form instructions.** Any phrasing, synonyms, typos, "respectively", "the rest", "except", "only", negation-free rules, "my left", and Finnish, Swedish and German. The real colours map automatically (orange → red, purple → blue), and "orange box" is understood as a bin. | The finals' heaviest episode (×1.5) is an unseen instruction. Tested on all 288 official template permutations plus 50+ unseen paraphrases. |
-| **Shape-aware grasping.** The shape (cube, cylinder or triangular prism) comes from the 3D top face. Cubes are pinched across parallel faces, triangles parallel to a side, and a retry starts from the next grasp axis. Each object's shape is a confidence-weighted vote across looks. | Fewer slips; shape-based instructions work. |
+| **Shape-aware grasping.** The shape (cube, cylinder or triangular prism) comes from the 3D top face. A prism lying on its side has a ridge on top, which shows up as a thin strip of top-face points, so it is still recognised as a prism and pinched across its two parallel end faces. Cubes are pinched across parallel faces, triangles parallel to a side, and a retry starts from the next grasp axis. Each object's shape is a confidence-weighted vote across looks. | Fewer slips; shape-based instructions work. |
 | **Self-calibration from the bins.** At the first look, the bin walls (fixed and known) are fitted in the depth image, and the camera's xy error is corrected. | Object position error fell from 12.5 to 7.2 mm mean (13.9 to 5.3 median) under camera jitter. |
 | **Colours tuned on real footage.** Colour is decided per blob, not per pixel, against reference hues from the sim and from the real head camera. Objects touching a bin are split from it. The robot's own arm and hands are excluded. | On the 49 Drop 2 frames, every purple, orange and yellow object is labelled correctly, and false purple detections fell from 12 to about 2 per frame. |
-| **Wrist-camera checks.** After each lift, the wrist camera checks the hand really holds the object, aborting and retrying at once if not, and double-checks the colour, putting the object back and re-sorting it if the head camera got it wrong. The checks are mount-agnostic: they rely on the held object moving with the camera. | The sim mounts the wrist cameras on the forearm, the real robot in the palm (Drop 2), so anything tuned to one view fails on the other. |
+| **Grip check after every lift.** Fingers that closed completely (no object in the way) plus no object blob moving with the wrist camera means the hand is empty; so does the head camera still seeing the object on the table where we grasped. The arm then aborts at once and the object is retried. On labelled sim picks, finger error separated every hold from every miss. **Wrist-camera colour check:** the wrist camera checks the hand really holds the object, aborting and retrying at once if not, and double-checks the colour, putting the object back and re-sorting it if the head camera got it wrong. The checks are mount-agnostic: they rely on the held object moving with the camera. | The sim mounts the wrist cameras on the forearm, the real robot in the palm (Drop 2), so anything tuned to one view fails on the other. |
+| **Scheduling that can't snowball.** An arm never waits more than 2 s at a chain point (over a bin, in the other arm's way) or reserves a move more than 6 s ahead. In one episode, reservations 28–38 s ahead had blocked both arms for 40 s. | Steady throughput when both arms compete for the middle. |
 | **Honest timing.** `AALTO_RT_EMULATE=1` charges all planning and vision wall time to the sim clock. Without it, a sim running at 0.15× real time hides about 85% of the thinking time that the real robot will pay for. | Our scores reflect real-time conditions. |
+
+## Matching the real setup
+
+- **Real colours.** Sim objects are recoloured to the real orange, purple and yellow, and the bins to the real red-orange. Isaac treats colours as linear RGB, so values are corrected to give the hues measured on the real head camera (orange H ≈ 13, bins H ≈ 4).
+- **Organiser update (14 Nov).** sort_fixed now uses yellow → left, purple → center, orange → right. This is the parser's fallback when the instruction is empty, and our sim tasks score it that way.
+- **Prisms on their side.** `AALTO_LYING_P` (in our sim test tooling) lays random prisms down, to test detection and grasping.
 
 ## Results (sim, our L40S box)
 
@@ -30,6 +37,7 @@ no GPU. Real-robot data was used only to tune and check the perception.
 | Instruction sort, nominal scene | 10/10 |
 | Fixed sort, domain-randomised (textures, lighting, camera jitter), seeds 1000–1002, after the scheduling fixes | 3/3, 5/5 (then a relocation-loop fix for the third scene) |
 | Same, real-time emulated | 3/3, 4/5, 2/4 |
+| Real colours + new fixed mapping, real-time emulated, seeds 1000–1002 | 3/3, 5/5, 1/4 |
 | Perception, 12 DR scenes | 54/54 objects found, 0 phantoms, shape accuracy 47/54 |
 
 ## Findings worth knowing
