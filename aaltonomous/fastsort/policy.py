@@ -329,7 +329,13 @@ class FastSortPolicy:
                 continue
             by = self.planner.bin_xy(b)[1]
             pref = ("left" if by > 0 else "right") if abs(by) > 0.1 else ("left" if xy[1] > 0 else "right")
-            pool.append(Obj(det=d, bin=b, pref=pref))
+            o = Obj(det=d, bin=b, pref=pref)
+            # same object as in the previous look: keep what we learned (which arm failed, relocation, back-off)
+            old = min((p for p in (self.pool or []) if np.linalg.norm(p.xy - xy) < r and p.bin == b),
+                      key=lambda p: np.linalg.norm(p.xy - xy), default=None)
+            if old is not None:
+                o.pref, o.tried, o.reloc, o.not_before = old.pref, set(old.tried), old.reloc, old.not_before
+            pool.append(o)
         self.pool = pool
         self._note(self._t(), f"look: {len(dets)} detections, {len(pool)} to sort: "
                               + ", ".join(f"{o.det.color}->{o.bin}({o.pref[0]})" for o in pool))
