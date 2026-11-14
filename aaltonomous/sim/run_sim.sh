@@ -30,7 +30,10 @@ if [[ "$TASK" == Aalto-* ]]; then
     fi
     export PYTHONPATH="$REPO:$PYTHONPATH"
     MAIN="$REPO/aaltonomous/sim/aalto_sim_main.py"
-    EXTRA=(--camera_include front_camera,left_wrist_camera,right_wrist_camera)
+    CAMS=front_camera,left_wrist_camera,right_wrist_camera
+    # third-person demo camera (scene_cfg.show_enabled): must be a real sensor, not a viewport-only camera
+    if [[ -n "$AALTO_SHOW_CAM" || -f /data/SHOW_CAM ]]; then CAMS="$CAMS,show_camera"; fi
+    EXTRA=(--camera_include "$CAMS")
 else
     export TELEIMAGER_CONFIG="$REPO/aaltonomous/sim/teleimager_isaacsim_zmq.yaml"
     MAIN=sim_main.py
