@@ -315,7 +315,10 @@ class FastSortPolicy:
             for s in SIDES:
                 if settled[s] and not self._candidates(s) and not self.lanes[s].pending(now):
                     want_look = True
-        if want_look and obs_tick > self.last_look_obs_tick and now - self.last_look_tick >= 15:
+        # an idle arm with nothing it may take re-looked every 0.5 s (40 looks of ~3 s CPU in one DR episode, all
+        # charged in real time): with objects still in the pool (owned by the busy arm) look at most once per 1.5 s
+        min_gap = 45 if (self.pool or not all(idle.values())) else 15
+        if want_look and obs_tick > self.last_look_obs_tick and now - self.last_look_tick >= min_gap:
             self._look(obs, now)
             self.last_look_tick, self.last_look_obs_tick = now, obs_tick
             if all(settled.values()) and not self.pool and not any(l.pending(now) for l in self.lanes.values()):
@@ -608,7 +611,18 @@ class FastSortPolicy:
                 o.pref, o.tried, o.reloc, o.not_before = old.pref, set(old.tried), old.reloc, old.not_before
             # an arm whose grasp already failed here doesn't try the same thing again: other arm, then relocation
             failed_sides = {a[1] for a in prior}
-            if failed_sides and not o.reloc:
+            d.retry = len(prior)   # ShapePlanner starts from the next grasp axis on a retry
+            if failed_sides and not o.reloc and b != "center":
+                # side bins: the other arm can't carry there (cross-body 0/26), so "let the other arm try" only meant a
+                # hand-off, and after a failed grasp at the hand-off spot it handed straight back: a relocation loop that
+                # ate a whole DR episode (seed 1002). The bin-side arm retries with another grasp axis; one hand-off after
+                # two misses.
+                if len(prior) >= 2 and not any(a[3] for a in self.attempts if np.linalg.norm(xy - a[0]) < 0.10):
+                    o.reloc, o.tried = True, set()
+                    o.pref = "left" if xy[1] > 0 else "right"
+                else:
+                    o.tried = set()
+            elif failed_sides and not o.reloc:
                 o.tried |= failed_sides
                 if len(o.tried) >= 2:
                     o.reloc, o.tried = True, set()

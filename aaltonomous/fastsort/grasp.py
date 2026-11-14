@@ -96,9 +96,11 @@ class ShapePerception(Perception):
         for m in per_px.values():
             any_m |= m
         protos = [np.asarray(self.hue_prototypes[c], float) for c in names]
-        dist = np.stack([np.min(np.minimum(np.abs(H[..., None] - p), 180 - np.abs(H[..., None] - p)), axis=-1)
-                         for p in protos])                      # (colours, h, w)
-        near = np.argmin(dist, axis=0)
+        sel_px = any_m > 0                                      # only the candidate pixels (was the whole image)
+        h_sel = H[sel_px][:, None]
+        dist = np.stack([np.min(np.minimum(np.abs(h_sel - p), 180 - np.abs(h_sel - p)), axis=-1) for p in protos])
+        near = np.zeros(H.shape, np.int64)
+        near[sel_px] = np.argmin(dist, axis=0)
         out = {c: np.zeros(H.shape, np.uint8) for c in names}
         n, lab = cv2.connectedComponents(any_m, connectivity=8)
         k5 = np.ones((5, 5), np.uint8)
@@ -208,6 +210,9 @@ class ShapePlanner(Planner):
 
     def _plan_side_hints(self, det, side, bin_name, arm_q, hand_q, **kw):
         axes = self._axis_hints(det, side) if os.environ.get("AALTO_SHAPE_GRASP", "1") != "0" else []
+        k = int(getattr(det, "retry", 0) or 0)
+        if axes and k:   # a retry after a failed grasp: start from the next axis (same grasp would likely fail again)
+            axes = axes[k % len(axes):] + axes[:k % len(axes)]
         if axes:
             saved_h, saved_w = self.kin.hint, self.kin.w_hint
             try:
