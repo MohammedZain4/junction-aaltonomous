@@ -42,6 +42,7 @@ def main(argv=None):
     ap.add_argument("--save", default=None)
     ap.add_argument("--no-dr", action="store_true", help="skip randomize() even if the sim has DR")
     ap.add_argument("--calib", action="store_true", help="self-calibrate the head xy offset from the bins first")
+    ap.add_argument("--out", default=None, help="append one JSON line per matched detection (signed xy error etc.)")
     a = ap.parse_args(argv)
 
     cfg = load_config(None, dict(FAST_OVERRIDES))
@@ -63,6 +64,8 @@ def main(argv=None):
     tot = dict(hit=0, miss=0, fp=0, shape_ok=0, shape_n=0)
     conf = []   # (true shape, detected shape, hull/rect ratio)
     errs = []   # xy error (m) of every matched detection
+    vecs = []   # (seed, shape, det shape, true x, true y, true z, dx, dy) signed error = detected - true, m
+    jout = open(a.out, "a") if a.out else None
     for s in a.seeds:
         home_arms(env, sc)
         env.rng = np.random.default_rng(s)
@@ -105,6 +108,16 @@ def main(argv=None):
             else:
                 used.add(bj)
                 errs.append(best)
+                o = truth[bj]
+                dx, dy = float(d.top[0] - o["pos"][0]), float(d.top[1] - o["pos"][1])
+                vecs.append((s, o["shape"], getattr(d, "shape", None), *map(float, o["pos"][:3]), dx, dy))
+                if jout:
+                    import json
+                    jout.write(json.dumps({"seed": s, "shape": o["shape"], "det_shape": getattr(d, "shape", None),
+                                           "color": d.color, "true": list(map(float, o["pos"][:3])),
+                                           "det": list(map(float, d.top[:3])), "uv": list(map(float, d.uv)),
+                                           "n_px": int(d.n_px), "method": d.method, "calib": bool(a.calib)}) + "\n")
+                    jout.flush()
                 tot["shape_n"] += 1
                 tot["shape_ok"] += int(getattr(d, "shape", None) == truth[bj]["shape"])
                 conf.append((truth[bj]["shape"], getattr(d, "shape", None), getattr(d, "shape_ratio", None)))
@@ -138,6 +151,27 @@ def main(argv=None):
     if errs:
         e = np.array(errs) * 1000
         print(f"  xy error mm: mean {e.mean():.1f}  median {np.median(e):.1f}  p90 {np.percentile(e, 90):.1f}  max {e.max():.1f}")
+    if vecs:
+        V = np.array([v[3:] for v in vecs], float)          # x y z dx dy
+        d_mm = V[:, 3:5] * 1000
+        print(f"  signed error mm (det - true): mean dx {d_mm[:, 0].mean():+.1f} dy {d_mm[:, 1].mean():+.1f}  "
+              f"std dx {d_mm[:, 0].std():.1f} dy {d_mm[:, 1].std():.1f}  (n {len(V)})")
+        for ts in ("cube", "cylinder", "triangle"):
+            m = np.array([v[1] == ts for v in vecs])
+            if m.any():
+                print(f"    {ts:<8} n={m.sum():2d}  dx {d_mm[m, 0].mean():+5.1f} +- {d_mm[m, 0].std():4.1f}  "
+                      f"dy {d_mm[m, 1].mean():+5.1f} +- {d_mm[m, 1].std():4.1f}")
+        seeds = sorted({v[0] for v in vecs})
+        per_seed = np.array([d_mm[np.array([v[0] == sd for v in vecs])].mean(0) for sd in seeds])
+        resid = np.concatenate([d_mm[np.array([v[0] == sd for v in vecs])] - per_seed[i] for i, sd in enumerate(seeds)])
+        print(f"  per-seed mean offset spread: std dx {per_seed[:, 0].std():.1f} dy {per_seed[:, 1].std():.1f} mm;"
+              f" within-seed residual std dx {resid[:, 0].std():.1f} dy {resid[:, 1].std():.1f} mm")
+        if len(V) >= 6:   # linear model: [dx dy] = [1 x y] @ W  (scale / rotation errors show in the x, y rows)
+            X = np.c_[np.ones(len(V)), V[:, 0], V[:, 1]]
+            W, *_ = np.linalg.lstsq(X, d_mm, rcond=None)
+            r = d_mm - X @ W
+            print(f"  linear fit d = b + A xy: b {np.round(W[0], 1)} mm, A {np.round(W[1:].T * 1e-3, 3).tolist()} (mm/mm);"
+                  f" residual std {r.std(0).round(1).tolist()} mm")
     n = tot["hit"] + tot["miss"]
     print(f"TOTAL: {tot['hit']}/{n} hit ({100 * tot['hit'] / max(n, 1):.0f}%), {tot['miss']} miss, {tot['fp']} false, "
           f"shape {tot['shape_ok']}/{tot['shape_n']}  (DR {'on' if dr else 'off'})")
