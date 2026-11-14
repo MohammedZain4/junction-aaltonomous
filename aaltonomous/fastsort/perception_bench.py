@@ -41,6 +41,7 @@ def main(argv=None):
     ap.add_argument("--match", type=float, default=0.025)
     ap.add_argument("--save", default=None)
     ap.add_argument("--no-dr", action="store_true", help="skip randomize() even if the sim has DR")
+    ap.add_argument("--calib", action="store_true", help="self-calibrate the head xy offset from the bins first")
     a = ap.parse_args(argv)
 
     cfg = load_config(None, dict(FAST_OVERRIDES))
@@ -61,6 +62,7 @@ def main(argv=None):
                    head_rgbd=True, head_rgbd_port=int(os.environ.get("AALTO_RGBD_PORT", "55560")), cameras=False)
     tot = dict(hit=0, miss=0, fp=0, shape_ok=0, shape_n=0)
     conf = []   # (true shape, detected shape, hull/rect ratio)
+    errs = []   # xy error (m) of every matched detection
     for s in a.seeds:
         home_arms(env, sc)
         env.rng = np.random.default_rng(s)
@@ -80,6 +82,14 @@ def main(argv=None):
             print(f"seed {s}: no frame")
             continue
         truth = [o for o in sc.state()["objects"] if o["active"]]
+        if a.calib:
+            from .calib import estimate_xy_offset
+            per.xy_offset = np.asarray(per.cfg.get("xy_offset") or [0.0, 0.0], float)
+            est = estimate_xy_offset(per, depth)
+            if est is not None:
+                per.xy_offset = per.xy_offset - est["offset"]
+                print(f"  calib seed {s}: offset {np.round(est['offset'] * 1000, 1)} mm, cost {est['cost0'] * 1000:.1f}"
+                      f" -> {est['cost'] * 1000:.1f} mm, inliers {est['inliers']:.2f}, n {est['n']}")
         dets = per.detect(rgb, depth)
         used, fps = set(), []
         for d in dets:
@@ -94,6 +104,7 @@ def main(argv=None):
                 fps.append(d)
             else:
                 used.add(bj)
+                errs.append(best)
                 tot["shape_n"] += 1
                 tot["shape_ok"] += int(getattr(d, "shape", None) == truth[bj]["shape"])
                 conf.append((truth[bj]["shape"], getattr(d, "shape", None), getattr(d, "shape_ratio", None)))
@@ -124,6 +135,9 @@ def main(argv=None):
             got = {k: sum(1 for d, _ in rows if d == k) for k in ("cube", "cylinder", "triangle", None)}
             print(f"  true {ts:<8} n={len(rows):2d} -> {got}  ratio min/med/max "
                   f"{rs.min():.2f}/{np.median(rs):.2f}/{rs.max():.2f}" if len(rs) else f"  true {ts}: no ratios")
+    if errs:
+        e = np.array(errs) * 1000
+        print(f"  xy error mm: mean {e.mean():.1f}  median {np.median(e):.1f}  p90 {np.percentile(e, 90):.1f}  max {e.max():.1f}")
     n = tot["hit"] + tot["miss"]
     print(f"TOTAL: {tot['hit']}/{n} hit ({100 * tot['hit'] / max(n, 1):.0f}%), {tot['miss']} miss, {tot['fp']} false, "
           f"shape {tot['shape_ok']}/{tot['shape_n']}  (DR {'on' if dr else 'off'})")

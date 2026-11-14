@@ -30,6 +30,7 @@ import numpy as np
 
 from aaltonomous.baselines.classical.config import hand_postures, home_arm, load_config
 from aaltonomous.baselines.classical.kinematics import ArmKinematics
+from .calib import estimate_xy_offset
 from .grasp import ShapePerception, ShapePlanner
 
 from aaltonomous.interface.calibration import Calibration
@@ -139,6 +140,7 @@ class FastSortPolicy:
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = SafetyConfig(dt=1.0 / HZ)
         self.perception = ShapePerception(self.cfg, self.scene, self.cal)
+        self._xy_base = np.asarray(self.perception.xy_offset, float).copy()
         self.planner = ShapePlanner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.time_limit = float(time_limit)
         self.min_arm_dist = float(min_arm_dist)
@@ -327,7 +329,30 @@ class FastSortPolicy:
     def _is_failed(self, xy):
         return any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed)
 
+    def _self_calibrate(self, depth):
+        """Head xy offset from the bins (fastsort.calib), once per episode at the first look (arms parked)."""
+        self.perception.xy_offset = self._xy_base.copy()
+        if os.environ.get("AALTO_SELF_CALIB", "1") == "0":
+            return
+        try:
+            est = estimate_xy_offset(self.perception, depth)
+        except Exception as e:
+            self._note(self._t(), f"self-calibration failed: {e!r}")
+            return
+        if est is None:
+            self._note(self._t(), "self-calibration: not enough bin wall points, using the configured extrinsics")
+            return
+        off = est["offset"]
+        good = est["cost"] < 0.8 * est["cost0"] and np.linalg.norm(off) <= 0.03
+        if good:
+            self.perception.xy_offset = self._xy_base - off
+        self._note(self._t(), f"self-calibration: bins seen {np.round(off * 1000, 1)} mm off, fit {est['cost0'] * 1000:.1f}"
+                              f" -> {est['cost'] * 1000:.1f} mm, inliers {est['inliers']:.2f}: "
+                              + ("applied" if good else "NOT applied"))
+
     def _look(self, obs, now):
+        if self.pool is None:
+            self._self_calibrate(obs["head_depth"])
         dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
         r = self.cfg["policy"]["same_object_radius"]
         with self.lock:
