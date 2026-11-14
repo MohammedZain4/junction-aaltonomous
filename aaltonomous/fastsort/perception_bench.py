@@ -118,7 +118,11 @@ def main(argv=None):
                     jout.write(json.dumps({"seed": s, "shape": o["shape"], "det_shape": getattr(d, "shape", None),
                                            "color": d.color, "true": list(map(float, o["pos"][:3])),
                                            "det": list(map(float, d.top[:3])), "uv": list(map(float, d.uv)),
-                                           "n_px": int(d.n_px), "method": d.method, "calib": bool(a.calib)}) + "\n")
+                                           "n_px": int(d.n_px), "method": d.method, "calib": bool(a.calib),
+                                           "ratio": getattr(d, "shape_ratio", None),
+                                           "top_pts": np.round(getattr(d, "top_pts", np.zeros((0, 3))), 4).tolist(),
+                                           "all_pts": np.round(getattr(d, "all_pts", np.zeros((0, 3)))[::3], 4).tolist()})
+                               + "\n")
                     jout.flush()
                 tot["shape_n"] += 1
                 tot["shape_ok"] += int(getattr(d, "shape", None) == truth[bj]["shape"])

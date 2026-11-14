@@ -34,51 +34,110 @@ def hull_rect_ratio(xy):
     return float(cv2.contourArea(cv2.convexHull(pts))) / max(float(w * h), 1e-9)
 
 
-def classify_top(xy):
-    """xy: (N, 2) top-face points (m). Returns (shape | None, [unit xy pinch axes])."""
+SHAPES = ("cube", "cylinder", "triangle")
+# hull/rect ratio per shape (DR perception bench, 58 matched objects, seeds 31-46): median / spread
+RATIO_MODEL = {"cube": (0.955, 0.03), "cylinder": (0.795, 0.025), "triangle": (0.60, 0.04)}
+RIDGE_MAX_WIDTH_STRICT = 0.010   # a lying prism's top band: 6-9 mm wide and RECTANGULAR (hull/rect >= 0.82);
+                                 # tilted-cylinder top slivers were 13-16 mm wide and rounded (0.73-0.77)
+HALF_CUBE_ASPECT = 1.6           # triangle-shaped top band twice as long as wide = half of a (tilted) cube top
+                                 # (5 cubes read as triangles: 28 x 55 mm; real standing prisms 39 x 45 mm)
+
+
+def _tri_axes(tri):
+    mode = os.environ.get("AALTO_TRI_AXIS", "tripod")
+    axes = []
+    for i in range(3):
+        if mode == "altitude":   # flat side <-> opposite vertex: tested in sim, the vertex slips (1/4)
+            v = 0.5 * (tri[(i + 1) % 3] + tri[(i + 2) % 3]) - tri[i]
+        elif mode == "tripod":   # finger direction TOWARDS a vertex: the two fingers straddle that apex edge, the
+            v = tri[i] - tri.mean(0)  # thumb pushes the opposite flat face (3 contacts; ShapePlanner centres it)
+        else:                    # parallel to a side: both contacts on the two sloped faces, symmetric
+            v = tri[(i + 2) % 3] - tri[(i + 1) % 3]
+        n = np.linalg.norm(v)
+        if n > 1e-6:
+            axes.append(v / n)
+    return axes
+
+
+def classify_top_p(xy):
+    """Soft shape classification of the top-face points xy (N, 2), m. Returns (probs {shape: p} | None,
+    axes {shape: [unit xy pinch axes]}). Rules first (lying-prism ridge, half-visible cube top), else a Gaussian
+    likelihood of the hull/rect area ratio; small / partial top faces get flatter probabilities."""
     import cv2
     if xy is None or len(xy) < 15:
-        return None, []
-    pts = np.asarray(xy, np.float32).reshape(-1, 1, 2)
+        return None, {}
+    pts = np.ascontiguousarray(xy, np.float32).reshape(-1, 1, 2)
     hull = cv2.convexHull(pts)
     a_hull = float(cv2.contourArea(hull))
     (cx, cy), (w, h), ang = cv2.minAreaRect(pts)
     a_rect = float(w * h)
     if a_rect <= 1e-8 or a_hull <= 1e-8:
-        return None, []
+        return None, {}
     r = a_hull / a_rect
     lo, hi = sorted((float(w), float(h)))
-    if hi >= RIDGE_MIN_LEN and lo <= RIDGE_MAX_WIDTH and hi >= RIDGE_ASPECT * max(lo, 1e-6):
-        # a triangular prism LYING on a rectangular side (organisers: prisms may lie on a face or a side): from above
-        # it is a ~52 x 45 mm rectangle as tall as a cube, but its top is a ridge, so the top band is a thin strip.
-        # Pinch along the ridge: the two triangular end faces are parallel (45 mm apart).
-        t = np.radians(ang)
-        ax = np.array([np.cos(t), np.sin(t)]) if float(w) >= float(h) else np.array([-np.sin(t), np.cos(t)])
-        return "triangle", [ax]
-    if r >= SQUARE_MIN:
-        t = np.radians(ang)
-        axes = [np.array([np.cos(t), np.sin(t)]), np.array([-np.sin(t), np.cos(t)])]
-        return "cube", axes
-    if r <= TRIANGLE_MAX:
-        try:
-            _, tri = cv2.minEnclosingTriangle(hull)
-        except cv2.error:
-            return "triangle", []
-        tri = tri.reshape(3, 2).astype(float)
-        mode = os.environ.get("AALTO_TRI_AXIS", "tripod")
-        axes = []
-        for i in range(3):
-            if mode == "altitude":   # flat side <-> opposite vertex: tested in sim, the vertex slips (1/4)
-                v = 0.5 * (tri[(i + 1) % 3] + tri[(i + 2) % 3]) - tri[i]
-            elif mode == "tripod":   # finger direction TOWARDS a vertex: the two fingers straddle that apex edge, the
-                v = tri[i] - tri.mean(0)  # thumb pushes the opposite flat face (3 contacts; ShapePlanner centres it)
-            else:                    # parallel to a side: both contacts on the two sloped faces, symmetric
-                v = tri[(i + 2) % 3] - tri[(i + 1) % 3]
-            n = np.linalg.norm(v)
-            if n > 1e-6:
-                axes.append(v / n)
-        return "triangle", axes
-    return "cylinder", []
+    t = np.radians(ang)
+    rect_axes = [np.array([np.cos(t), np.sin(t)]), np.array([-np.sin(t), np.cos(t)])]
+    long_ax = rect_axes[0] if float(w) >= float(h) else rect_axes[1]
+    tri, tri_fill = None, 0.0
+    try:
+        a_tri, tri = cv2.minEnclosingTriangle(hull)
+        if tri is not None and float(a_tri) > 1e-12:
+            tri = tri.reshape(3, 2).astype(float)
+            tri_fill = a_hull / float(a_tri)
+        else:
+            tri = None
+    except cv2.error:
+        tri = None
+    axes = {"cube": rect_axes, "cylinder": [], "triangle": _tri_axes(tri) if tri is not None else []}
+
+    ridge = hi >= RIDGE_MIN_LEN and lo <= RIDGE_MAX_WIDTH and hi >= RIDGE_ASPECT * max(lo, 1e-6)
+    if ridge and (r >= 0.82 or lo <= RIDGE_MAX_WIDTH_STRICT):
+        # a triangular prism LYING on a rectangular side: its top is a ridge, so the top band is a thin straight
+        # (rectangular) strip. Pinch along the ridge: the two triangular end faces are parallel (45 mm apart).
+        axes["triangle"] = [long_ax]
+        return {"cube": 0.07, "cylinder": 0.03, "triangle": 0.90}, axes
+    if ridge:
+        # rounded sliver (13-22 mm): the visible part of a tilted / occluded cylinder or cube top, rarely a ridge
+        axes["triangle"] = [long_ax]
+        return {"cube": 0.30, "cylinder": 0.45, "triangle": 0.25}, axes
+    if tri is not None and tri_fill >= 0.85 and r <= 0.72 and hi >= HALF_CUBE_ASPECT * max(lo, 1e-6):
+        # right-angled triangle twice as long as wide = half of a cube top (tilted cube: only the high half is in the
+        # top band). Its two short sides are cube faces: pinch across those, i.e. along the legs at the right angle.
+        def cos_at(i):
+            u, v = tri[(i + 1) % 3] - tri[i], tri[(i + 2) % 3] - tri[i]
+            return abs(float(u @ v)) / max(float(np.linalg.norm(u) * np.linalg.norm(v)), 1e-12)
+        k = int(np.argmin([cos_at(i) for i in range(3)]))   # the vertex closest to 90 deg
+        legs = [tri[(k + 1) % 3] - tri[k], tri[(k + 2) % 3] - tri[k]]
+        axes["cube"] = [v / np.linalg.norm(v) for v in legs]
+        return {"cube": 0.75, "cylinder": 0.05, "triangle": 0.20}, axes
+    like = {s: float(np.exp(-0.5 * ((r - m) / sd) ** 2)) + 1e-3 for s, (m, sd) in RATIO_MODEL.items()}
+    tot = sum(like.values())
+    p = {s: v / tot for s, v in like.items()}
+    # partial view (arm in front, edge of the image): flatten towards uniform
+    full = {"cube": 1.9e-3, "cylinder": 1.45e-3, "triangle": 1.0e-3}   # m^2, typical full top-band areas
+    best = max(p, key=p.get)
+    wgt = float(np.clip(a_hull / (0.6 * full[best]), 0.3, 1.0))
+    p = {s: v ** wgt for s, v in p.items()}
+    tot = sum(p.values())
+    return {s: v / tot for s, v in p.items()}, axes
+
+
+def set_shape(det, shape):
+    """Set det.shape and the matching grasp axes (from det.axes_by_shape) + whether they are directed (tripod)."""
+    det.shape = shape
+    det.grasp_axes = list((getattr(det, "axes_by_shape", None) or {}).get(shape, [])) if shape else []
+    # tripod prism grasp: the axes are DIRECTED (fingers towards the apex), not reversible pinch axes
+    det.axes_directed = (shape == "triangle" and len(det.grasp_axes) == 3
+                         and os.environ.get("AALTO_TRI_AXIS", "tripod") == "tripod")
+
+
+def classify_top(xy):
+    """xy: (N, 2) top-face points (m). Returns (shape | None, [unit xy pinch axes]) = the most likely shape."""
+    p, axes = classify_top_p(xy)
+    if p is None:
+        return None, []
+    s = max(p, key=p.get)
+    return s, axes.get(s, [])
 
 
 class ShapePerception(Perception):
@@ -160,13 +219,13 @@ class ShapePerception(Perception):
             P = self.cal.pixel_to_pelvis(self.cam, u, v, d)
             z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
             top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
-            det.shape, det.grasp_axes = classify_top(top[:, :2])
-            # tripod prism grasp: the axes are DIRECTED (fingers towards the apex), not reversible pinch axes
-            det.axes_directed = (det.shape == "triangle" and len(det.grasp_axes) == 3
-                                 and os.environ.get("AALTO_TRI_AXIS", "tripod") == "tripod")
+            det.top_pts, det.all_pts = top[:, :3], P   # (diagnosis: perception_bench --out)
+            det.shape_p, det.axes_by_shape = classify_top_p(top[:, :2])
+            set_shape(det, None if det.shape_p is None else max(det.shape_p, key=det.shape_p.get))
             det.shape_ratio = hull_rect_ratio(top[:, :2])
         except Exception:
-            det.shape, det.grasp_axes, det.shape_ratio = None, [], None
+            det.shape, det.grasp_axes, det.shape_ratio, det.shape_p, det.axes_by_shape = None, [], None, None, {}
+            det.axes_directed = False
         b = self.xy_bias(det.shape)
         if b is not None:
             det.top = np.r_[det.top[:2] - b, det.top[2:]]
@@ -295,3 +354,127 @@ class ShapePlanner(Planner):
                 self.kin.hint, self.kin.w_hint = saved_h, saved_w
                 self.kin.offset[side] = saved_off
         return super()._plan_side_hints(det, side, bin_name, arm_q, hand_q, **kw)
+
+    # ------------------------------------------------------------------ push-over (standing prisms)
+    # A prism standing on a triangular end has no parallel pair of faces a top-down claw can pinch (tripod grasps:
+    # ~1/10 in grasp_bench). Lying on a rectangular side, its two triangular ends ARE parallel, 45 mm apart: the
+    # cube-like grasp. So: push it over first. Push from a vertex towards the opposite flat face, near the top: it
+    # pivots on the far base edge (centroid 15 mm from it, centre of mass ~25 mm up: tips at ~31 deg) and lands on
+    # that rectangular face. The next look sees a ridge -> pinch the two triangular ends.
+    push_height = 0.036       # m above the counter: grasp point of the closed hand (fist) while pushing
+    push_start = 0.085        # m from the object centre (behind the vertex) where the push starts
+    push_end = 0.0            # m past the centre where the grasp point stops (the fist front is ~3 cm ahead)
+    push_speed = 0.35         # fraction of the normal arm speed / acceleration for the push stroke
+
+    def push_dirs(self, det, obstacles=()):
+        """Candidate push directions (unit xy, vertex -> opposite face), best first: towards the robot / sideways
+        rather than into the bins, and away from other objects."""
+        axes = [np.asarray(a, float) for a in (getattr(det, "grasp_axes", None) or [])]
+        if not getattr(det, "axes_directed", False) or len(axes) != 3:
+            return []
+        c = det.top[:2]
+        obs = np.asarray(list(obstacles), float).reshape(-1, 2)
+        out = []
+        for a in axes:          # a: centroid -> vertex; the push goes the other way
+            d = -a / np.linalg.norm(a)
+            land = c + 0.04 * d
+            pen = 0.0
+            if len(obs):
+                pen = float(np.clip(0.09 - np.linalg.norm(obs - land, axis=1), 0, None).sum()) * 20
+            out.append((float(d[0]) + pen, d))
+        out.sort(key=lambda t: t[0])
+        return [d for _, d in out]
+
+    def plan_push(self, det, side, arm_q, hand_q, obstacles=()):
+        """Push a standing prism over with the closed hand. Plan with target_bin 'counter' (like a relocation):
+        no grip check, not counted as a failed grasp; the object is re-detected at the next look."""
+        from aaltonomous.baselines.classical.planner import Plan, ramp, time_scale
+        from aaltonomous.baselines.classical.kinematics import ArmKinematics
+        last = Plan(False, side=side, color=det.color, reason="no push direction")
+        cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
+        zc, H = self.scene.counter_z, self.height
+        sl = ArmKinematics.sl(side)
+        fist = hand_q.copy(); fist[sl] = self.post["closed"][sl]
+        hand_open = hand_q.copy(); hand_open[sl] = self.post["open"][sl]
+        c = np.asarray(det.top[:2], float)
+        wall = float(self.scene.cfg["bins"]["wall_height"])
+        z_safe = zc + max(g["carry_height"], wall + H + 0.03)
+        saved_h, saved_w = self.kin.hint, self.kin.w_hint
+        try:
+            for d in self.push_dirs(det, obstacles)[:2]:
+                plan = Plan(False, side=side, color=det.color, target_bin="counter")
+                self.kin.hint, self.kin.w_hint = np.r_[d, 0.0], self.axis_hint_weight   # fingers along the push
+                z = zc + self.push_height
+                p0, p1 = np.r_[c - d * self.push_start, z], np.r_[c + d * self.push_end, z]
+                q0, ok = self._ik(side, p0, arm_q, "push_start", plan)
+                if not ok:
+                    last = plan; last.reason = f"IK push start ({side})"; continue
+                cl = self.clearance(side, q0, fist, fingers_only=True)
+                if cl < 0.006:   # fist would scrape the counter: raise the stroke (still above the centre of mass)
+                    z += 0.006 - cl
+                    if z > zc + H - 0.008:
+                        last = plan; last.reason = "fist too low for a push"; continue
+                    p0, p1 = np.r_[p0[:2], z], np.r_[p1[:2], z]
+                    q0, ok = self._ik(side, p0, arm_q, "push_start", plan)
+                    if not ok:
+                        last = plan; last.reason = f"IK push start ({side})"; continue
+                pre = np.r_[p0[:2], max(z + g["approach_height"], z_safe)]
+                q_pre, ok = self._ik(side, pre, q0, "pregrasp", plan)
+                if not ok:
+                    last = plan; last.reason = f"IK push pre ({side})"; continue
+                down = self._cartesian(side, pre, p0, q_pre, "descend", plan)
+                stroke = down and self._cartesian(side, p0, p1, down[-1], "push", plan)
+                up = stroke and self._cartesian(side, p1, np.r_[p1[:2], z_safe], stroke[-1], "retreat", plan)
+                if not up:
+                    last = plan; last.reason = plan.reason or f"IK push path ({side})"; continue
+                vmax, amax, hv = mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"]
+                home = arm_q.copy(); home[sl] = self.home[sl]
+                parts, phases, cur = [], [], [arm_q.copy(), hand_q.copy()]
+
+                def add(name, Qs, hand_to=None, speed=1.0):
+                    a = time_scale([cur[0]] + list(Qs), vmax * speed, amax * speed, self.dt)
+                    h = np.repeat(cur[1][None], len(a), 0)
+                    if hand_to is not None:
+                        hr = ramp(cur[1], hand_to, hv, self.dt)
+                        if len(hr) > len(a):
+                            a = np.vstack([a, np.repeat((a[-1] if len(a) else cur[0])[None], len(hr) - len(a), 0)])
+                            h = np.repeat(cur[1][None], len(a), 0)
+                        h[:len(hr)] = hr
+                        h[len(hr):] = hand_to
+                        cur[1] = np.asarray(hand_to, float).copy()
+                    if len(a):
+                        s0 = sum(len(x[0]) for x in parts)
+                        parts.append((a, h))
+                        phases.append((name, s0, s0 + len(a)))
+                        cur[0] = a[-1].copy()
+
+                add("to_pregrasp", [q_pre], hand_to=fist)
+                add("descend", down)
+                add("push", stroke, speed=self.push_speed)
+                add("retreat", up)
+                add("home", [home], hand_to=hand_open)
+                plan.arm = np.vstack([a for a, _ in parts])
+                plan.hand = np.vstack([h for _, h in parts])
+                plan.phases = phases
+                plan.waypoints["grasp"] = p0          # policy bookkeeping: where this arm works
+                bad = None
+                for k in range(0, len(plan.arm), 3):
+                    name = next(n for n, s, e in phases if s <= k < e)
+                    need = 0.004 if name in ("descend", "push") else mo["counter_clearance"]
+                    if self.clearance(side, plan.arm[k], plan.hand[k]) < need - 2e-3:
+                        bad = f"hand too low during {name}"
+                        break
+                    if self.bin_clearance(side, plan.arm[k], plan.hand[k]) < 0.003:
+                        bad = f"hand over a bin rim during {name}"
+                        break
+                if bad:
+                    last = plan; last.reason = bad; continue
+                plan.safety_clips = self.dry_run_safety(arm_q, hand_q, plan.arm, plan.hand)
+                if plan.safety_clips:
+                    last = plan; last.reason = f"{plan.safety_clips} safety clips in dry run"; continue
+                plan.ok = True
+                plan.reason = f"push over towards ({d[0]:+.2f},{d[1]:+.2f})"
+                return plan
+        finally:
+            self.kin.hint, self.kin.w_hint = saved_h, saved_w
+        return last

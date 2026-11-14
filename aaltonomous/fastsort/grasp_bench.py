@@ -53,6 +53,9 @@ def main(argv=None):
     ap.add_argument("--wrist", action="store_true", help="log grip-check features (joints + wrist cam) per pick, "
                     "labelled by the scene scorer; one JSON line per pick in --wrist-out")
     ap.add_argument("--wrist-out", default="/tmp/grip_features.jsonl")
+    ap.add_argument("--push", action="store_true", help="push standing prisms over first, look again, then grasp")
+    ap.add_argument("--save-pre", default=None, help="with --wrist: save the wrist image at the pre-grasp hover "
+                    "(+ mid-descend) per pick into this dir, named by true / perceived shape")
     ap.add_argument("--true-xy", action="store_true", help="grasp at the TRUE object xy (sim state) instead of the "
                     "perceived one; shape, axes and colour stay perceived. Answers: are misses position errors?")
     ap.add_argument("--calib", action="store_true", help="run the policy's bin self-calibration at the first look "
@@ -117,6 +120,35 @@ def main(argv=None):
             b = FIXED_MAPPING[d.color]
             by = pl.bin_xy(b)[1]
             side = ("left" if by > 0 else "right") if abs(by) > 0.1 else ("left" if d.top[1] > 0 else "right")
+            if a.push and getattr(d, "shape", None) == "triangle" and getattr(d, "axes_directed", False):
+                others = [o.top[:2] for o in dets if o is not d]
+                pp = pl.plan_push(d, side, cur_a, cur_h, others)
+                if not pp.ok:
+                    pp = pl.plan_push(d, "right" if side == "left" else "left", cur_a, cur_h, others)
+                objs = [o for o in sc.state()["objects"] if o["active"] and o["color"] == d.color]
+                tr = min(objs, key=lambda o: np.linalg.norm(np.asarray(o["pos"][:2]) - d.top[:2])) if objs else {}
+                if not pp.ok:
+                    print(f"  seed {s} PUSH {d.color} (true {tr.get('shape')}): no push plan: {pp.reason}")
+                else:
+                    _, why = run(env, pp.arm, pp.hand)
+                    cur_a, cur_h = pp.arm[-1].copy(), pp.hand[-1].copy()
+                    obs, _ = run(env, np.repeat(cur_a[None], 20, 0), np.repeat(cur_h[None], 20, 0))
+                    d2s = [x for x in per.detect(obs["head_rgb"], obs["head_depth"]) if x.color == d.color]
+                    d2 = min(d2s, key=lambda x: np.linalg.norm(x.top[:2] - d.top[:2]), default=None)
+                    tr2 = next((o for o in sc.state()["objects"] if o.get("name") == tr.get("name")), {})
+                    if d2 is None or np.linalg.norm(d2.top[:2] - d.top[:2]) > 0.10:
+                        print(f"  seed {s} PUSH {d.color} (true {tr.get('shape')}): object not found after push")
+                    else:
+                        st = ("TIPPED (ridge)" if d2.shape == "triangle" and not getattr(d2, "axes_directed", False)
+                              else "still standing" if d2.shape == "triangle" else f"now {d2.shape}")
+                        mv = 1000 * np.linalg.norm(d2.top[:2] - d.top[:2])
+                        print(f"  seed {s} PUSH {d.color} (true {tr.get('shape')}) {pp.side}: {st}, moved {mv:.0f} mm, "
+                              f"h {100 * (d2.top[2] - pl.scene.counter_z):.1f} cm  [{pp.reason}]"
+                              f"  true quat {np.round(tr2.get('quat', []), 2).tolist() if tr2.get('quat') is not None else '?'}")
+                        d = d2
+                    if why:
+                        print(f"  seed {s}: episode ended during push: {why}")
+                        break
             plan = pl._plan_side_hints(d, side, b, cur_a, cur_h)
             if not plan.ok:
                 other = "right" if side == "left" else "left"
@@ -126,10 +158,25 @@ def main(argv=None):
                 continue
             ph = {name: (s, e) for name, s, e in plan.phases}
             snap = {"lift0": ph["lift"][0] + 2, "lift1": ph["lift"][1] - 1} if (a.wrist and "lift" in ph) else None
+            if snap is not None and a.save_pre and "to_pregrasp" in ph:
+                snap["pre"] = ph["to_pregrasp"][1] - 1
+                snap["mid"] = (ph["descend"][0] + ph["descend"][1]) // 2 if "descend" in ph else ph["to_pregrasp"][1] + 15
+                objs = [o for o in sc.state()["objects"] if o["active"] and o["color"] == d.color]
+                true_shape = min(objs, key=lambda o: np.linalg.norm(np.asarray(o["pos"][:2]) - d.top[:2]))["shape"] if objs else "none"
             before = _n_correct(sc) if a.wrist else 0
             _, why = run(env, plan.arm, plan.hand, snap=snap)
             cur_a, cur_h = plan.arm[-1].copy(), plan.hand[-1].copy()
             tried += 1
+            if snap is not None and a.save_pre:
+                import cv2
+                os.makedirs(a.save_pre, exist_ok=True)
+                ps = getattr(plan, "side", None) or side
+                for tag in ("pre", "mid"):
+                    o = snap.get(tag)
+                    im = None if isinstance(o, int) or o is None else o.get(f"{ps}_wrist_rgb")
+                    if im is not None:
+                        cv2.imwrite(os.path.join(a.save_pre, f"s{s}_{tried}_{tag}_{ps}_{d.color}_T{true_shape}_D"
+                                                 f"{getattr(d, 'shape', None)}.png"), np.asarray(im)[..., ::-1])
             if a.wrist and snap and "lift1" in snap and not isinstance(snap["lift1"], int):
                 import json
                 from .wristcheck import grip_features, fmt, head_features

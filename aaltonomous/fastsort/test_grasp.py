@@ -93,6 +93,34 @@ class TestClassify(unittest.TestCase):
             return (np.abs(P[:, 0]) <= S / 2) & (P[:, 1] >= 0) & (P[:, 1] <= S / 2)
         self.assertEqual(classify_top(grid(inside))[0], "cube")
 
+    def test_half_cube_top_is_a_cube(self):
+        # tilted cube: only the high half of its top face is in the top band -> a right triangle 45 x 45 (legs).
+        # DR bench: 5 cubes read as triangles this way. Must be a cube, pinched across the legs (= cube faces).
+        for deg in (0, 30, -50):
+            t = np.radians(deg)
+            R = rot(-t)
+
+            def inside(P):
+                Q = P @ R.T
+                return (Q[:, 0] >= -S / 2) & (Q[:, 1] >= -S / 2) & (Q[:, 0] + Q[:, 1] <= 0)
+            shape, axes = classify_top(grid(inside))
+            self.assertEqual(shape, "cube", deg)
+            self.assertTrue(axis_close(axes, [np.cos(t), np.sin(t)], 10), (deg, axes))
+
+    def test_cylinder_sliver_is_not_a_ridge(self):
+        # tilted cylinder: top band = a circular segment ~14 x 38 mm (DR bench: 6 cylinders read as lying prisms)
+        def inside(P):
+            return (np.linalg.norm(P, axis=1) <= S / 2) & (P[:, 1] >= S / 2 - 0.014)
+        shape, _ = classify_top(grid(inside, n=120))
+        self.assertNotEqual(shape, "triangle")
+
+    def test_probabilities_sum_to_one(self):
+        from aaltonomous.fastsort.grasp import classify_top_p
+        for inside in (square(0.3), circle, triangle(0.2)[0]):
+            p, _ = classify_top_p(grid(inside))
+            self.assertAlmostEqual(sum(p.values()), 1.0, places=6)
+            self.assertGreater(max(p.values()), 0.6)
+
     def test_too_few_points(self):
         self.assertEqual(classify_top(np.zeros((5, 2))), (None, []))
 

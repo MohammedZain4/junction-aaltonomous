@@ -187,6 +187,7 @@ class FastSortPolicy:
         self.latest_obs_tick = -1
         self.obs_hist = collections.deque(maxlen=8)   # (tick, obs) of the last act() calls (~0.5 s apart)
         self.color_fix = []                            # (xy, colour) corrected by the wrist-camera colour check
+        self.pushed = []                               # xy of standing prisms already pushed over
         self.shape_votes = []                          # per-object shape votes across looks (_vote_shape)
         # act (default): abort on the head-camera cue OR the finger/wrist verdict; head: head cue only;
         # log: never act; 0: off
@@ -682,22 +683,55 @@ class FastSortPolicy:
         """Shape double-check (#4): every look re-measures each object's top face; keep a per-object vote (same colour,
         within 3 cm) and use the majority, weighting confident measurements (hull/rect ratio far from the thresholds)
         higher. A single partly occluded view (an arm in front) can't flip the shape any more."""
-        from .grasp import SQUARE_MIN, TRIANGLE_MAX
-        shape, r = getattr(d, "shape", None), getattr(d, "shape_ratio", None)
-        if shape is None:
+        p = getattr(d, "shape_p", None)
+        if not p:
             return
-        w = 1.0 if r is None else 0.5 + min(abs(r - SQUARE_MIN), abs(r - TRIANGLE_MAX)) / 0.05
-        mem = next((m for m in self.shape_votes if m["color"] == d.color and np.linalg.norm(m["xy"] - xy) < 0.03), None)
-        if mem is None:
-            mem = {"color": d.color, "xy": xy.copy(), "votes": {}}
-            self.shape_votes.append(mem)
+        mem = self._shape_mem(d.color, xy, create=True)
         mem["xy"] = xy.copy()
-        mem["votes"][shape] = mem["votes"].get(shape, 0.0) + w
-        best = max(mem["votes"], key=mem["votes"].get)
-        if best != shape:
-            d.shape = best
-            d.grasp_axes = []   # this view's axes belong to the other shape: fall back to the generic finger hints
-        d.shape_votes = dict(mem["votes"])
+        self._add_shape_evidence(mem, p)
+        self._apply_shape_mem(d, mem)
+
+    def _shape_mem(self, color, xy, create=False):
+        mem = next((m for m in self.shape_votes if m["color"] == color and np.linalg.norm(m["xy"] - xy) < 0.03), None)
+        if mem is None and create:
+            mem = {"color": color, "xy": np.asarray(xy, float).copy(), "logp": {}, "n": 0}
+            self.shape_votes.append(mem)
+        return mem
+
+    @staticmethod
+    def _add_shape_evidence(mem, p, source="head"):
+        """Bayes: add log-likelihoods, each floored so one view can't veto. Head looks repeat nearly the same view,
+        so they count as their AVERAGE times at most 2 views; other cameras (wrist) add as independent evidence."""
+        key = "logp" if source == "head" else "logp_" + source
+        mem.setdefault(key, {})
+        for s in ("cube", "cylinder", "triangle"):
+            mem[key][s] = mem[key].get(s, 0.0) + float(np.log(max(p.get(s, 0.0), 0.02)))
+        if source == "head":
+            mem["n"] += 1
+
+    @staticmethod
+    def shape_posterior(mem):
+        n = max(mem.get("n", 0), 1)
+        lp = {s: v / n * min(n, 2) for s, v in mem.get("logp", {}).items()}
+        for k, extra in mem.items():
+            if k.startswith("logp_"):
+                for s, v in extra.items():
+                    lp[s] = lp.get(s, 0.0) + v
+        if not lp:
+            return {"cube": 1 / 3, "cylinder": 1 / 3, "triangle": 1 / 3}
+        m = max(lp.values())
+        e = {s: float(np.exp(v - m)) for s, v in lp.items()}
+        t = sum(e.values())
+        return {s: v / t for s, v in e.items()}
+
+    def _apply_shape_mem(self, d, mem):
+        from .grasp import set_shape
+        post = self.shape_posterior(mem)
+        best = max(post, key=post.get)
+        if best != d.shape:
+            set_shape(d, best)   # this view's own axes for that shape (cube legs / ridge / tripod), maybe none
+        d.shape_p = post
+        d.shape_votes = {s: round(v, 2) for s, v in post.items()}
 
     def _candidates(self, side):
         if not self.pool:
@@ -742,6 +776,12 @@ class FastSortPolicy:
 
     def _make_plan(self, lane, obj, side, arm_q, hand_q):
         """The plan for obj with this arm, or None (failure already recorded / handed to the other arm)."""
+        if self._wants_push(obj):
+            obstacles = [o.xy for o in self.pool if o is not obj]
+            plan = self.planner.plan_push(obj.det, side, arm_q, hand_q, obstacles)
+            if plan.ok:
+                return plan
+            self._note(self._t(), f"{side}: no push for {obj.det.color} prism ({plan.reason}): grasping it standing")
         if not obj.reloc and obj.bin not in ("center", side):
             # cross-body carry (left arm -> right bin or vice versa): 0 successes in 26 tries over 7 eval runs, each
             # failure cost 2.5-4 s of planning. Go straight to the hand-off.
@@ -769,6 +809,21 @@ class FastSortPolicy:
                 self._side_failed(obj, side, f"no relocation: {plan.reason}")
                 return None
         return plan
+
+    push_min_p = 0.75   # P(triangle) needed before pushing (a pushed cube just slides: a wasted trip)
+
+    def _wants_push(self, obj):
+        """Standing prism (triangle top face, directed tripod axes), confident, not pushed here before."""
+        d = obj.det
+        if os.environ.get("AALTO_PUSH", "1") == "0" or obj.reloc:
+            return False
+        if getattr(d, "shape", None) != "triangle" or not getattr(d, "axes_directed", False):
+            return False
+        if len(getattr(d, "grasp_axes", None) or []) != 3:
+            return False
+        if float((getattr(d, "shape_p", None) or {}).get("triangle", 1.0)) < self.push_min_p:
+            return False
+        return not any(np.linalg.norm(obj.xy - p) < 0.07 for p in self.pushed)
 
     def _commit(self, lane, obj, plan, side, sl, sa, sh, use_chain, arm_q, hand_q, dt_plan):
         A, H = plan.arm[:, sl], plan.hand[:, sl]
@@ -865,11 +920,13 @@ class FastSortPolicy:
                                        None if ce is None else H[ce - 1].copy(), plan_a=A, plan_h=H))
             lane.version += 1
             self.attempts.append((obj.xy, side, obj.det.color, plan.target_bin == "counter"))
+            if (plan.reason or "").startswith("push over"):
+                self.pushed.append(np.asarray(obj.xy, float).copy())
             if plan.target_bin != "counter":
                 self.bin_drops[obj.bin] = self.bin_drops.get(obj.bin, 0) + 1
         finally:
             self.lock.release()
-        what = ("relocate" if plan.target_bin == "counter" else f"-> {obj.bin}") + (f" [{plan.reason}]" if plan.reason else "")
+        what = ("push" if (plan.reason or "").startswith("push over") else "relocate" if plan.target_bin == "counter" else f"-> {obj.bin}") + (f" [{plan.reason}]" if plan.reason else "")
         self._note(self._t(), f"{side}: {obj.det.color} {what}  start +{(cut + d) / HZ:.1f}s (delay {d / HZ:.1f}s, "
                               f"{'chained' if use_chain else 'from tail'}), {len(A) / HZ:.1f}s, planned in {dt_plan:.2f}s")
         return True
