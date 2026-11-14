@@ -61,6 +61,24 @@ def classify_top(xy):
 
 
 class ShapePerception(Perception):
+    # Under domain randomization (bin tint + lighting + head-camera pose error) the orange bin walls drift into the
+    # yellow HSV range, and the walls just outside the masked footprints (back walls, walls in the gaps between bins)
+    # became phantom "yellow" objects: 13 in 8 DR scenes, all at or behind the bin row and 5.5-8.5 cm tall.
+    bin_line_margin = 0.015   # m in front of the bins' near edge
+
+    def _reject(self, det):
+        why = super()._reject(det)
+        if why is not None:
+            return why
+        b = self.scene.cfg["bins"]
+        near_x = min(self.scene.mat_to_pelvis(np.r_[np.asarray(c, float), 0.0])[0] for c in b["centers"].values()) \
+            - float(np.asarray(b["outer_size"], float)[1]) / 2
+        if det.top[0] >= near_x - self.bin_line_margin:
+            return f"behind bin line (x {det.top[0]:.3f} >= {near_x - self.bin_line_margin:.3f})"
+        # (A tighter height limit, 1.35 sizes, also removed them but lost 2 real objects in a DR scene whose head
+        #  camera tilt made everything read ~1 cm taller: the bin-line rule alone removes all 13.)
+        return None
+
     def _from_depth(self, color, u, v, d, area):
         det = super()._from_depth(color, u, v, d, area)
         if det is None:
