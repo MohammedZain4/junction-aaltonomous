@@ -117,7 +117,7 @@ def main(argv=None):
             tried += 1
             if a.wrist and snap and "lift1" in snap and not isinstance(snap["lift1"], int):
                 import json
-                from .wristcheck import grip_features, fmt
+                from .wristcheck import grip_features, fmt, head_features
                 time.sleep(0.5)
                 ok = _n_correct(sc) > before
                 ps = getattr(plan, "side", None) or side
@@ -126,6 +126,7 @@ def main(argv=None):
                 f = grip_features(per, d.color, np.asarray(o1["hand_q"])[sl], plan.hand[ph["close"][1] - 1][sl],
                                   o1.get(f"{ps}_wrist_rgb"),
                                   None if isinstance(o0, int) or o0 is None else o0.get(f"{ps}_wrist_rgb"))
+                f.update(head_features(per, d.color, o1.get("head_rgb"), o1.get("head_depth"), d.top[:2]))
                 print(f"  seed {s} {ps} {d.color} {getattr(d, 'shape', '?')}: {'HELD' if ok else 'MISS'}  {fmt(f)}")
                 wout.write(json.dumps({"seed": s, "side": ps, "color": d.color, "shape": getattr(d, "shape", None),
                                        "ok": bool(ok), **{k: v for k, v in f.items()}}) + "\n")

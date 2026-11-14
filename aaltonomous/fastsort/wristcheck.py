@@ -66,6 +66,35 @@ def grip_features(perception, color, hand_q7, hand_cmd7, wrist_rgb, wrist_rgb_pr
     return f
 
 
+def head_features(perception, color, head_rgb, head_depth, xy, r_table=0.035, r_up=0.09):
+    """Head-camera grip cue, independent of the wrist mount: at the end of the lift, count head pixels of the object's
+    colour whose 3D point is (a) still at table height within r_table of the grasp xy (object left behind) and (b)
+    lifted well above the table within r_up (object in the hand). The hand may hide the object from the head camera,
+    so only (a) is used as evidence of a miss; (b) is logged."""
+    out = {"head_table_px": None, "head_up_px": None}
+    try:
+        if head_rgb is None or head_depth is None:
+            return out
+        m = perception.masks(np.asarray(head_rgb)).get(color)
+        if m is None:
+            return out
+        d = np.asarray(head_depth, float)
+        dlo, dhi = perception.cfg["depth_range_mm"]
+        vv, uu = np.nonzero((m > 0) & (d >= dlo) & (d <= dhi))
+        if len(uu) == 0:
+            out["head_table_px"] = out["head_up_px"] = 0
+            return out
+        P = perception.cal.pixel_to_pelvis(perception.cam, uu, vv, d[vv, uu])
+        P[:, :2] += getattr(perception, "xy_offset", 0.0)
+        h = (P[:, 2] - perception.scene.counter_z) / perception.height
+        r = np.linalg.norm(P[:, :2] - np.asarray(xy, float)[:2], axis=1)
+        out["head_table_px"] = int(((r < r_table) & (h >= 0.25) & (h <= 1.4)).sum())
+        out["head_up_px"] = int(((r < r_up) & (h > 1.8)).sum())
+    except Exception as e:
+        out["head_err"] = repr(e)
+    return out
+
+
 def fmt(f):
     s = f"finger err {f['jerr']:.2f}" if f.get("jerr") is not None else "finger err ?"
     s += f", wrist blob {100 * f['frac']:.1f}%"
@@ -76,4 +105,6 @@ def fmt(f):
     for oc, (fr, iou) in (f.get("others") or {}).items():
         if fr >= 0.01:
             s += f"; {oc} {100 * fr:.1f}%" + (f" IoU {iou:.2f}" if iou is not None else "")
+    if f.get("head_table_px") is not None:
+        s += f"; head: {f['head_table_px']} px left on table, {f['head_up_px']} px lifted"
     return s

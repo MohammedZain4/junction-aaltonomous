@@ -39,7 +39,7 @@ from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene
 
 from .instruction import parse_instruction
-from .wristcheck import fmt as grip_fmt, grip_features
+from .wristcheck import fmt as grip_fmt, grip_features, head_features
 
 HZ = 30.0
 SIDES = ("left", "right")
@@ -187,7 +187,9 @@ class FastSortPolicy:
         self.obs_hist = collections.deque(maxlen=8)   # (tick, obs) of the last act() calls (~0.5 s apart)
         self.color_fix = []                            # (xy, colour) corrected by the wrist-camera colour check
         self.shape_votes = []                          # per-object shape votes across looks (_vote_shape)
-        self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "log")   # log | 0 (off); act: after calibration
+        # head (default): abort a pick only on the head-camera cue (object still on the table at the grasp spot),
+        # wrist cues logged; act: wrist cues act too (after calibration); log: never act; 0: off
+        self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "head")
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
         self.last_look_obs_tick = -1
@@ -359,22 +361,37 @@ class FastSortPolicy:
                 if p.checked or "lift" not in p.phases or p.hand_closed is None:
                     continue
                 ls, le = p.phases["lift"]
-                if obs_tick < le - 3:
+                if obs_tick < le + 4:    # a few ticks past the lift end: camera frames lag the joints
                     continue
                 p.checked = True
-                if obs_tick > le + 20:   # observation came too late (missed chunk): skip
+                if obs_tick > le + 30:   # observation came too late (missed chunk): skip
                     continue
                 with self.lock:
                     prev = next((o for t, o in reversed(self.obs_hist) if ls - 10 <= t <= le - 12), None)
+                    at_ls = next((o for t, o in reversed(self.obs_hist) if t <= ls + 1), None)
                 try:
                     f = grip_features(self.perception, p.obj.det.color, np.asarray(obs["hand_q"], float)[lane.sl],
                                       p.hand_closed, obs.get(f"{side}_wrist_rgb"),
                                       None if prev is None else prev.get(f"{side}_wrist_rgb"))
-                    v = self._grip_verdict(f)
+                    gxy = p.grasp_xy if getattr(p, "grasp_xy", None) is not None else p.obj.xy
+                    f.update(head_features(self.perception, p.obj.det.color, obs.get("head_rgb"),
+                                           obs.get("head_depth"), gxy))
+                    stale = False
+                    try:   # head frame unchanged since the lift started = stale image, no head verdict
+                        hd0, hd1 = at_ls.get("head_depth"), obs.get("head_depth")
+                        stale = hd0 is not None and hd1 is not None and np.array_equal(
+                            np.asarray(hd0)[::8, ::8], np.asarray(hd1)[::8, ::8])
+                    except Exception:
+                        pass
+                    if stale:
+                        f["head_table_px"] = None
+                        f["head_stale"] = True
+                    head_miss = (f.get("head_table_px") or 0) >= self.grip_head_px
+                    v = "miss" if head_miss else self._grip_verdict(f)
                     self._note(self._t(), f"{side}: grip check {p.obj.det.color} "
                                           f"{getattr(p.obj.det, 'shape', None) or '?'} at {p.obj.xy.round(3)}: "
                                           f"{v.upper()}  {grip_fmt(f)}")
-                    if v == "miss" and self.grip_mode == "act":
+                    if v == "miss" and (self.grip_mode == "act" or (self.grip_mode == "head" and head_miss)):
                         self._abort_pick(lane, p)
                     elif v == "held" and p.plan_a is not None:
                         oc = self._colour_mismatch(f)
@@ -393,6 +410,8 @@ class FastSortPolicy:
     grip_j_empty = 0.08     # rad: max finger tracking error below this = fingers reached the closed posture
     grip_frac_min = 0.03    # wrist blob of the object's colour, fraction of the image
     grip_iou_min = 0.5      # ... that stays put between early and late lift (moves with the camera)
+    grip_head_px = 60       # head pixels of the object's colour still at table height within 3.5 cm of the grasp xy
+                            # (a 4 cm object top is ~600-900 px from the head camera; the closing hand hides part)
 
     def _grip_verdict(self, f):
         j = f.get("jerr")
