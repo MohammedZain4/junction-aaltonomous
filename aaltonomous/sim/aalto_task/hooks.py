@@ -222,11 +222,12 @@ class AaltoRuntime:
         if not getattr(self, "_show_path", None):
             return                                  # nothing until the first reset
         cam = env.scene["show_camera"]
+        out = cam.data.output                       # Isaac Lab 3 renders lazily: touch .data BEFORE reading .frame
         frame = _camera_frame(cam)
         if frame is not None and frame == getattr(self, "_show_last", None):
             return
         self._show_last = frame
-        rgb = _t(cam.data.output["rgb"])[0, ..., :3].cpu().numpy().astype(np.uint8)
+        rgb = _t(out["rgb"])[0, ..., :3].cpu().numpy().astype(np.uint8)
         import cv2
         if self._show_vw is None:
             os.makedirs(os.path.dirname(self._show_path), exist_ok=True)

@@ -271,7 +271,7 @@ def show_enabled():
 
 
 # eye / target in the pelvis frame (x forward to the counter, y left, z up); override with AALTO_SHOW_POSE="ex,ey,ez,tx,ty,tz"
-SHOW_POSE = (1.30, 0.95, 0.60, 0.22, 0.0, -0.02)
+SHOW_POSE = (0.62, 1.05, 0.80, 0.33, 0.0, -0.02)   # robot's left, high: objects not hidden by the bins
 SHOW_RES = (1280, 720)
 
 
