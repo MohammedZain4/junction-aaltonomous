@@ -186,6 +186,7 @@ class FastSortPolicy:
         self.latest_obs_tick = -1
         self.obs_hist = collections.deque(maxlen=8)   # (tick, obs) of the last act() calls (~0.5 s apart)
         self.color_fix = []                            # (xy, colour) corrected by the wrist-camera colour check
+        self.shape_votes = []                          # per-object shape votes across looks (_vote_shape)
         self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "log")   # log | 0 (off); act: after calibration
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
@@ -587,6 +588,7 @@ class FastSortPolicy:
             fix = min(((np.linalg.norm(xy - fxy), c) for fxy, c in self.color_fix), default=None, key=lambda t: t[0])
             if fix is not None and fix[0] < 0.05:
                 d.color = fix[1]   # the wrist camera saw this one up close
+            self._vote_shape(d, xy)
             b = self.rules.bin_for(d.color, getattr(d, "shape", None))
             if b is None:
                 continue
@@ -633,6 +635,27 @@ class FastSortPolicy:
         self.pool = pool
         self._note(self._t(), f"look: {len(dets)} detections, {len(pool)} to sort: "
                               + ", ".join(f"{o.det.color} {getattr(o.det, 'shape', None) or '?'}->{o.bin}({o.pref[0]})" for o in pool))
+
+    def _vote_shape(self, d, xy):
+        """Shape double-check (#4): every look re-measures each object's top face; keep a per-object vote (same colour,
+        within 3 cm) and use the majority, weighting confident measurements (hull/rect ratio far from the thresholds)
+        higher. A single partly occluded view (an arm in front) can't flip the shape any more."""
+        from .grasp import SQUARE_MIN, TRIANGLE_MAX
+        shape, r = getattr(d, "shape", None), getattr(d, "shape_ratio", None)
+        if shape is None:
+            return
+        w = 1.0 if r is None else 0.5 + min(abs(r - SQUARE_MIN), abs(r - TRIANGLE_MAX)) / 0.05
+        mem = next((m for m in self.shape_votes if m["color"] == d.color and np.linalg.norm(m["xy"] - xy) < 0.03), None)
+        if mem is None:
+            mem = {"color": d.color, "xy": xy.copy(), "votes": {}}
+            self.shape_votes.append(mem)
+        mem["xy"] = xy.copy()
+        mem["votes"][shape] = mem["votes"].get(shape, 0.0) + w
+        best = max(mem["votes"], key=mem["votes"].get)
+        if best != shape:
+            d.shape = best
+            d.grasp_axes = []   # this view's axes belong to the other shape: fall back to the generic finger hints
+        d.shape_votes = dict(mem["votes"])
 
     def _candidates(self, side):
         if not self.pool:
