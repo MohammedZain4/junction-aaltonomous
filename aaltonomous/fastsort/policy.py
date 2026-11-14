@@ -49,8 +49,13 @@ FAST_OVERRIDES = {
     "motion.close_hold_s": 0.2,
     "motion.open_hold_s": 0.25,
     "motion.settle_s": 0.2,
-    "motion.chunk": 6,
-    "motion.hold_ticks": 3,
+    "motion.chunk": 10,             # ticks per reply: every reply carries ~3.5 MB of images to decode
+    "motion.hold_ticks": 6,
+    # Park/home pose = the robot-side home (hands ~22 cm out to the sides, above the bins' height, outside the head
+    # camera view) instead of the sim's ARM_HOME, which parks both hands right above the middle of the object band:
+    # there an idle arm blocks the other arm from every object near the centre line, and it hides objects.
+    "home_arm_q": [0.2, 0.7, 0.4, -0.2, 0.0, -0.5, 0.0,
+                   0.2, -0.7, -0.4, -0.2, 0.0, -0.5, 0.0],
 }
 
 
@@ -221,7 +226,7 @@ class FastSortPolicy:
 
     # ------------------------------------------------------------------ kinematics helpers (brain thread / init only)
     def _points(self, side, arm14, hand14):
-        p = self.kin.hand_points(side, arm14, hand14)
+        p = np.delete(self.kin.hand_points(side, arm14, hand14), 1, axis=0)  # drop the virtual grasp point
         extra = [self.kin.data.oMf[f].translation.copy() for f in self._extra_frames[side]]
         return np.vstack([p] + ([np.array(extra)] if extra else []))
 
@@ -274,7 +279,7 @@ class FastSortPolicy:
             for s in SIDES:
                 if settled[s] and not self._candidates(s) and not self.lanes[s].pending(now):
                     want_look = True
-        if want_look and obs_tick > self.last_look_obs_tick and now - self.last_look_tick >= 6:
+        if want_look and obs_tick > self.last_look_obs_tick and now - self.last_look_tick >= 15:
             self._look(obs, now)
             self.last_look_tick, self.last_look_obs_tick = now, obs_tick
             if all(settled.values()) and not self.pool and not any(l.pending(now) for l in self.lanes.values()):
@@ -312,7 +317,7 @@ class FastSortPolicy:
             busy_hands = []
             for l in self.lanes.values():
                 if len(l.qa) and l.cmd_pts is not None:
-                    busy_hands.append(l.cmd_pts[1, :2])  # grasp point xy of a moving arm
+                    busy_hands.append(l.cmd_pts[0, :2])  # palm xy of a moving arm
         pool = []
         for d in dets:
             xy = np.asarray(d.top[:2], float)
@@ -375,27 +380,16 @@ class FastSortPolicy:
         if not obj.reloc:
             plan = self.planner._plan_side_hints(obj.det, side, obj.bin, arm_q, hand_q)
             if not plan.ok:
-                obj.tried.add(side)
-                other = "right" if side == "left" else "left"
-                if other not in obj.tried:
-                    obj.pref = other
-                else:
-                    obj.reloc, obj.tried = True, set()
-                    obj.pref = "left" if obj.xy[1] > 0 else "right"
-                self._note(self._t(), f"{side}: no plan for {obj.det.color}->{obj.bin}: {plan.reason}")
+                self._side_failed(obj, side, f"no plan: {plan.reason}")
                 return False
         else:
             obstacles = [o.xy for o in self.pool if o is not obj]
             plan = self.planner.plan_relocation(obj.det, obj.bin, arm_q, hand_q, obstacles)
-            if not plan.ok or plan.side != side:
-                obj.tried.add(side)
-                if plan.ok:
-                    obj.pref = plan.side
-                elif len(obj.tried) >= 2:
-                    self.failed.append(obj.xy)
-                    self._note(self._t(), f"give up on {obj.det.color} at {obj.xy.round(3)}: {plan.reason}")
-                else:
-                    obj.pref = "right" if side == "left" else "left"
+            if plan.ok and plan.side != side:  # the relocation needs the other arm: hand it over
+                obj.pref = plan.side
+                return False
+            if not plan.ok:
+                self._side_failed(obj, side, f"no relocation: {plan.reason}")
                 return False
         dt_plan = time.monotonic() - t0
 
@@ -418,10 +412,17 @@ class FastSortPolicy:
             other = self.lanes["right" if side == "left" else "left"]
             O = other.pts if len(other.qa) else np.empty((0,) + other.cmd_pts.shape)
             O_last = other.pts[-1] if len(other.qa) else other.cmd_pts
-            d = self._find_delay(cut, hold_pts, P, O, O_last)
+            d, closest = self._find_delay(cut, hold_pts, P, O, O_last)
+            other_parked = not len(other.qa)
             if d is None:
-                obj.not_before = now + 15
-                self._note(self._t(), f"{side}: {obj.det.color} would collide with the other arm: later")
+                why = (f"{side} {self.PT_NAMES[closest[1]]} vs {other.side} {self.PT_NAMES[closest[2]]} "
+                       f"{100 * closest[0]:.1f} cm")
+                if other_parked:
+                    # the other arm is not moving: waiting cannot help -> this arm can't do it, like a planning failure
+                    self._side_failed(obj, side, f"collides with the parked {other.side} arm ({why})")
+                else:
+                    obj.not_before = now + 15
+                    self._note(self._t(), f"{side}: {obj.det.color} would collide with the other arm ({why}): later")
                 return False
             t_end = (now + cut + d + len(A)) / HZ
             if t_end > self.time_limit - 0.5:
@@ -453,8 +454,10 @@ class FastSortPolicy:
     def _find_delay(self, cut, hold_pts, P, O, O_last, max_delay=240, step=3):
         """Smallest d (ticks) such that [hold d ticks] + P, starting `cut` ticks from now, keeps every point >=
         min_arm_dist from the other arm's timeline O (then its final pose O_last). None if no d <= max_delay."""
+        """Returns (d or None, closest) with closest = (distance, my point index, their point index) at d = 0."""
         dmin = self.min_arm_dist
         n_o = len(O)
+        closest = None
         for d in range(0, max_delay + 1, step):
             L = d + len(P)
             idx = cut + np.arange(0, L, 2)
@@ -463,12 +466,33 @@ class FastSortPolicy:
             theirs = np.where((idx < n_o)[:, None, None], O[np.clip(idx, 0, max(n_o - 1, 0))] if n_o else O_last[None],
                               O_last[None])
             dist = np.linalg.norm(mine[:, :, None, :] - theirs[:, None, :, :], axis=-1)
+            if closest is None:
+                _, i, j = np.unravel_index(dist.argmin(), dist.shape)
+                closest = (float(dist.min()), int(i), int(j))
             if dist.min() >= dmin:
-                return d
-            if idx[0] >= n_o and d > 0:
-                # the other arm is already parked for the whole window: waiting longer cannot help
-                return None
-        return None
+                return d, closest
+            if idx[0] >= n_o:
+                # the other arm is parked for the whole window: waiting longer cannot help
+                return None, closest
+        return None, closest
+
+    # collision point names (order of _points): hand_points minus the virtual grasp point, then extra frames
+    PT_NAMES = ("palm", "finger1", "finger2", "finger3", "tip1", "tip2", "tip3", "elbow", "wrist_roll", "wrist_yaw")
+
+    def _side_failed(self, obj, side, reason):
+        """This arm cannot do `obj`: let the other arm try, then fall back to a relocation, then give up."""
+        obj.tried.add(side)
+        other = "right" if side == "left" else "left"
+        if not obj.reloc and other not in obj.tried:
+            obj.pref = other
+        elif not obj.reloc:
+            obj.reloc, obj.tried = True, set()
+            obj.pref = "left" if obj.xy[1] > 0 else "right"
+        elif len(obj.tried) >= 2:
+            self.failed.append(obj.xy)
+            self._note(self._t(), f"give up on {obj.det.color} at {obj.xy.round(3)}: {reason}")
+            return
+        self._note(self._t(), f"{side}: can't do {obj.det.color}->{obj.bin}: {reason}")
 
     def _note(self, t, msg):
         self.events.append((round(t, 2), msg))
