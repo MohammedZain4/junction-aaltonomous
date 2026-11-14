@@ -65,7 +65,7 @@ def classify_top(xy):
         except cv2.error:
             return "triangle", []
         tri = tri.reshape(3, 2).astype(float)
-        mode = os.environ.get("AALTO_TRI_AXIS", "side")
+        mode = os.environ.get("AALTO_TRI_AXIS", "tripod")
         axes = []
         for i in range(3):
             if mode == "altitude":   # flat side <-> opposite vertex: tested in sim, the vertex slips (1/4)
@@ -163,7 +163,7 @@ class ShapePerception(Perception):
             det.shape, det.grasp_axes = classify_top(top[:, :2])
             # tripod prism grasp: the axes are DIRECTED (fingers towards the apex), not reversible pinch axes
             det.axes_directed = (det.shape == "triangle" and len(det.grasp_axes) == 3
-                                 and os.environ.get("AALTO_TRI_AXIS", "side") == "tripod")
+                                 and os.environ.get("AALTO_TRI_AXIS", "tripod") == "tripod")
             det.shape_ratio = hull_rect_ratio(top[:, :2])
         except Exception:
             det.shape, det.grasp_axes, det.shape_ratio = None, [], None

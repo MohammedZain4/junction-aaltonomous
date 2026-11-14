@@ -90,7 +90,8 @@ def main(argv=None):
             per.xy_offset = np.asarray(per.cfg.get("xy_offset") or [0.0, 0.0], float)
             est = estimate_xy_offset(per, depth)
             if est is not None:
-                per.xy_offset = per.xy_offset - est["offset"]
+                from .policy import FastSortPolicy
+                per.xy_offset = per.xy_offset - est["offset"] + FastSortPolicy.calib_bias(FastSortPolicy)
                 print(f"  calib seed {s}: offset {np.round(est['offset'] * 1000, 1)} mm, cost {est['cost0'] * 1000:.1f}"
                       f" -> {est['cost'] * 1000:.1f} mm, inliers {est['inliers']:.2f}, n {est['n']}")
         dets = per.detect(rgb, depth)

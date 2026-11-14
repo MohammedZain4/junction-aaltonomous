@@ -1,5 +1,6 @@
 """python -m unittest aaltonomous.fastsort.test_grasp   (numpy + opencv)"""
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -62,6 +63,7 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(shape, "cylinder")
         self.assertEqual(axes, [])
 
+    @unittest.mock.patch.dict("os.environ", {"AALTO_TRI_AXIS": "side"})
     def test_triangle_axes_parallel_to_sides(self):
         for deg in (0, 25, -40):
             inside, V = triangle(np.radians(deg))

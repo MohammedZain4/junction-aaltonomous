@@ -568,6 +568,17 @@ class FastSortPolicy:
     def _is_failed(self, xy):
         return any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed)
 
+    # Wall-fit method bias (m, added to the calibrated offset). perception_bench, 20 DR seeds (2026-11-14): after the
+    # bin fit every object read 9.9 mm too near (x) and 1.3 mm right (y), per-seed spread only 2 mm, while raw
+    # detections were unbiased: the fit sees the walls ~9 mm too far (edge pixels mixed with the floor behind).
+    CALIB_BIAS = (0.0099, 0.0013)
+
+    def calib_bias(self):
+        env = os.environ.get("AALTO_CALIB_BIAS")
+        if env is not None:
+            return np.asarray([float(v) for v in env.split(",")], float) / 1000.0 if env.strip() else np.zeros(2)
+        return np.asarray(self.CALIB_BIAS, float)
+
     def _self_calibrate(self, depth):
         """Head xy offset from the bins (fastsort.calib), once per episode at the first look (arms parked)."""
         self.perception.xy_offset = self._xy_base.copy()
@@ -584,7 +595,7 @@ class FastSortPolicy:
         off = est["offset"]
         good = est["cost"] < 0.8 * est["cost0"] and np.linalg.norm(off) <= 0.03
         if good:
-            self.perception.xy_offset = self._xy_base - off
+            self.perception.xy_offset = self._xy_base - off + self.calib_bias()
         self._note(self._t(), f"self-calibration: bins seen {np.round(off * 1000, 1)} mm off, fit {est['cost0'] * 1000:.1f}"
                               f" -> {est['cost'] * 1000:.1f} mm, inliers {est['inliers']:.2f}: "
                               + ("applied" if good else "NOT applied"))

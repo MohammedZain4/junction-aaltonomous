@@ -55,6 +55,8 @@ def main(argv=None):
     ap.add_argument("--wrist-out", default="/tmp/grip_features.jsonl")
     ap.add_argument("--true-xy", action="store_true", help="grasp at the TRUE object xy (sim state) instead of the "
                     "perceived one; shape, axes and colour stay perceived. Answers: are misses position errors?")
+    ap.add_argument("--calib", action="store_true", help="run the policy's bin self-calibration at the first look "
+                    "(as in episodes); AALTO_CALIB_BIAS='' disables its bias correction")
     ap.add_argument("--shapes", default=None, help="only pick these perceived shapes, e.g. triangle (comma list); "
                     "scoring still covers every object, so read the BY SHAPE line")
     ap.add_argument("--ov", action="append", default=[], help="config override key=JSON, e.g. "
@@ -94,6 +96,9 @@ def main(argv=None):
         Hh = np.vstack([Hh, np.repeat(pol.post["open"][None], n, 0)]) if len(Hh) else np.repeat(hand[None], n, 0)
         obs, why = run(env, A, Hh)
         cur_a, cur_h = A[-1].copy(), Hh[-1].copy()
+        if a.calib:   # the policy's own first-look bin calibration (+ its method-bias correction)
+            pol._self_calibrate(obs["head_depth"])
+            print(f"  seed {s}: " + (pol.events[-1][1] if pol.events else "no calibration note"))
         dets = per.detect(obs["head_rgb"], obs["head_depth"])
         if a.true_xy:
             truth = [np.asarray(o["pos"], float) for o in sc.state()["objects"] if o["active"]]
