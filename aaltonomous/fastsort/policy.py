@@ -104,6 +104,8 @@ class LanePlan:
     phases: dict = field(default_factory=dict)   # name -> (absolute start tick, absolute end tick)
     hand_closed: np.ndarray | None = None        # commanded 7 hand joints at the end of "close"
     checked: bool = False                        # grip check done
+    plan_a: np.ndarray | None = None             # this lane's (N, 7) arm / hand trajectory, plan tick 0 = start
+    plan_h: np.ndarray | None = None
 
 
 class Lane:
@@ -183,6 +185,7 @@ class FastSortPolicy:
         self.latest_obs = None
         self.latest_obs_tick = -1
         self.obs_hist = collections.deque(maxlen=8)   # (tick, obs) of the last act() calls (~0.5 s apart)
+        self.color_fix = []                            # (xy, colour) corrected by the wrist-camera colour check
         self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "log")   # log | 0 (off); act: after calibration
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
@@ -363,12 +366,170 @@ class FastSortPolicy:
                     f = grip_features(self.perception, p.obj.det.color, np.asarray(obs["hand_q"], float)[lane.sl],
                                       p.hand_closed, obs.get(f"{side}_wrist_rgb"),
                                       None if prev is None else prev.get(f"{side}_wrist_rgb"))
+                    v = self._grip_verdict(f)
                     self._note(self._t(), f"{side}: grip check {p.obj.det.color} "
-                                          f"{getattr(p.obj.det, 'shape', None) or '?'} at {p.obj.xy.round(3)}: {grip_fmt(f)}")
+                                          f"{getattr(p.obj.det, 'shape', None) or '?'} at {p.obj.xy.round(3)}: "
+                                          f"{v.upper()}  {grip_fmt(f)}")
+                    if v == "miss" and self.grip_mode == "act":
+                        self._abort_pick(lane, p)
+                    elif v == "held" and p.plan_a is not None:
+                        oc = self._colour_mismatch(f)
+                        if oc is not None:
+                            self._note(self._t(), f"{side}: COLOUR CHECK: held object looks {oc}, not "
+                                                  f"{p.obj.det.color}")
+                            if self.grip_mode == "act":
+                                self._put_back(lane, p, oc)
                 except Exception as e:
                     self._note(self._t(), f"{side}: grip check failed: {e!r}")
                 did = True
         return did
+
+    # Grip verdict thresholds (placeholders until fitted on grasp_bench --wrist data). Conservative by design: abort
+    # only when BOTH cues say empty; a wrong abort costs a whole pick, a missed abort only the wasted trip.
+    grip_j_empty = 0.08     # rad: max finger tracking error below this = fingers reached the closed posture
+    grip_frac_min = 0.03    # wrist blob of the object's colour, fraction of the image
+    grip_iou_min = 0.5      # ... that stays put between early and late lift (moves with the camera)
+
+    def _grip_verdict(self, f):
+        j = f.get("jerr")
+        if j is None:
+            return "unsure"
+        wrist_ok = bool(f.get("wrist_valid"))
+        seen = f.get("frac", 0.0) >= self.grip_frac_min and (f.get("iou") is None or f["iou"] >= self.grip_iou_min)
+        if j >= self.grip_j_empty or seen:
+            return "held"
+        if not wrist_ok:   # no usable wrist frame: joints alone, stricter
+            return "miss" if j < 0.75 * self.grip_j_empty else "unsure"
+        return "miss"
+
+    def _colour_mismatch(self, f):
+        """Another colour whose wrist blob is clearly the held object (big, stays put, dwarfs the expected colour's)."""
+        best = None
+        for oc, (fr, iou) in (f.get("others") or {}).items():
+            if fr >= max(self.grip_frac_min * 2, 2.0 * f.get("frac", 0.0)) and iou is not None and iou >= 0.7:
+                if best is None or fr > best[1]:
+                    best = (oc, fr)
+        return None if best is None else best[0]
+
+    def _put_back(self, lane, p, new_color):
+        """Held object is the wrong colour: lower it back along the (already validated) lift path, open, come back up
+        the same way, then home (chainable). The next look sorts it with the corrected colour (color_fix)."""
+        side, sl = lane.side, lane.sl
+        if "close" not in p.phases or "lift" not in p.phases:
+            return
+        with self.lock:
+            now = self.tick
+            hold_pts, ca, ch = lane.cmd_pts, lane.cmd_a.copy(), lane.cmd_h.copy()
+            later = [q for q in lane.plans if q.start > p.start]
+        A0, H0 = p.plan_a, p.plan_h
+        i_now = now - p.start                       # plan index of the next unsent tick
+        cs, ce = (t - p.start for t in p.phases["close"])
+        ls, le = (t - p.start for t in p.phases["lift"])
+        if not (le <= i_now <= len(A0)) or i_now - ls > 3 * (le - ls) + 30:
+            return                                  # too far into the carry: let it go (wrong bin, logged)
+        down_a, down_h = A0[ls:i_now][::-1], H0[ls:i_now][::-1]
+        open_h = H0[cs:ce][::-1]
+        open_a = np.repeat(A0[ls][None], len(open_h), 0)
+        h_open = H0[cs]
+        up_a, up_h = A0[ls:le], np.repeat(h_open[None], le - ls, 0)
+        arm, hand = self.home.copy(), self.post["open"].copy()
+        arm[sl], hand[sl] = A0[le - 1], h_open
+        tgt_a, tgt_h = arm.copy(), hand.copy()
+        tgt_a[sl], tgt_h[sl] = self.home[sl], self.post["open"][sl]
+        ha, hh = self.planner.go_to(arm, hand, tgt_a, tgt_h)
+        mo = self.cfg["motion"]
+        for k in range(0, len(ha), 3):
+            if self.planner.clearance(side, ha[k], hh[k]) < mo["counter_clearance"] - 2e-3 or \
+                    self.planner.bin_clearance(side, ha[k], hh[k]) < 0.003:
+                self._note(self._t(), f"{side}: put-back not safe: finishing the pick")
+                return
+        A = np.vstack([down_a, open_a, up_a, ha[:, sl]])
+        H = np.vstack([down_h, open_h, up_h, hh[:, sl]])
+        full_a, full_h = np.repeat(self.home[None], len(A), 0), np.repeat(self.post["open"][None], len(A), 0)
+        full_a[:, sl], full_h[:, sl] = A, H
+        s_arm, s_hand = self.home.copy(), self.post["open"].copy()
+        s_arm[sl], s_hand[sl] = ca, ch
+        if self.planner.dry_run_safety(s_arm, s_hand, full_a, full_h):
+            self._note(self._t(), f"{side}: put-back would clip: finishing the pick")
+            return
+        P = self._lane_points(side, A, H)
+        other = self.lanes["right" if side == "left" else "left"]
+        with self.lock:
+            if self.tick != now or lane.cmd_pts is not hold_pts:
+                return
+            O = other.pts if len(other.qa) else np.empty((0,) + other.cmd_pts.shape)
+            O_last = other.pts[-1] if len(other.qa) else other.cmd_pts
+            d, _ = self._find_delay(0, hold_pts, P, O, O_last, max_delay=max(240, len(O) + 30))
+            if d is None:
+                self._note(self._t(), f"{side}: put-back would collide with the other arm: finishing the pick")
+                return
+            n_home = len(ha)
+            lane.qa = np.vstack([np.repeat(ca[None], d, 0), A])
+            lane.qh = np.vstack([np.repeat(ch[None], d, 0), H])
+            lane.pts = np.concatenate([np.repeat(hold_pts[None], d, 0), P]) if d else P
+            lane.chain_abs = now + d + len(A) - n_home
+            lane.chain_a, lane.chain_h = A[len(A) - n_home - 1].copy(), H[len(A) - n_home - 1].copy()
+            p.end = now + d + len(A)
+            for q in later:
+                lane.plans.remove(q)
+            lane.version += 1
+            self.color_fix.append((p.obj.xy.copy(), new_color))
+        self._note(self._t(), f"{side}: put back {p.obj.det.color}->{new_color} object (delay {d / HZ:.1f}s)")
+
+    def _abort_pick(self, lane, p):
+        """Empty hand after the lift: drop the rest of this pick (carry, open, home) and the look-ahead plan queued
+        behind it, open the hand and head home from where it is. The new home move is chainable, so the next pick
+        can start straight from here. Collision-checked against the other arm and the counter/bin rims; if it can't
+        be done safely the original plan simply continues (it's only a wasted trip)."""
+        side, sl = lane.side, lane.sl
+        with self.lock:
+            now = self.tick
+            ca, ch = lane.cmd_a.copy(), lane.cmd_h.copy()
+            hold_pts = lane.cmd_pts
+            later = [q for q in lane.plans if q.start > p.start]
+            if p.end <= now + 2:
+                return
+        arm, hand = self.home.copy(), self.post["open"].copy()
+        arm[sl], hand[sl] = ca, ch
+        tgt_a, tgt_h = arm.copy(), hand.copy()
+        tgt_a[sl], tgt_h[sl] = self.home[sl], self.post["open"][sl]
+        A, H = self.planner.go_to(arm, hand, tgt_a, tgt_h)
+        mo = self.cfg["motion"]
+        for k in range(0, len(A), 3):
+            if self.planner.clearance(side, A[k], H[k]) < mo["counter_clearance"] - 2e-3 or \
+                    self.planner.bin_clearance(side, A[k], H[k]) < 0.003:
+                self._note(self._t(), f"{side}: abort not safe (counter/bin clearance): finishing the pick")
+                return
+        if self.planner.dry_run_safety(arm, hand, A, H):
+            self._note(self._t(), f"{side}: abort would clip: finishing the pick")
+            return
+        A, H = A[:, sl], H[:, sl]
+        P = self._lane_points(side, A, H)
+        other = self.lanes["right" if side == "left" else "left"]
+        with self.lock:
+            if self.tick != now or lane.cmd_pts is not hold_pts:
+                return   # a chunk went out meanwhile: the next observation re-checks nothing; finish the pick
+            O = other.pts if len(other.qa) else np.empty((0,) + other.cmd_pts.shape)
+            O_last = other.pts[-1] if len(other.qa) else other.cmd_pts
+            d, _ = self._find_delay(0, hold_pts, P, O, O_last, max_delay=max(240, len(O) + 30))
+            if d is None:
+                self._note(self._t(), f"{side}: abort would collide with the other arm: finishing the pick")
+                return
+            lane.qa = np.vstack([np.repeat(ca[None], d, 0), A])
+            lane.qh = np.vstack([np.repeat(ch[None], d, 0), H])
+            lane.pts = np.concatenate([np.repeat(hold_pts[None], d, 0), P]) if d else P
+            lane.chain_abs, lane.chain_a, lane.chain_h = now + d, ca.copy(), ch.copy()
+            p.end = now + d + len(A)
+            for q in later:
+                lane.plans.remove(q)
+                try:
+                    self.attempts.remove(next(a for a in self.attempts if a[0] is q.obj.xy or
+                                              (np.allclose(a[0], q.obj.xy) and a[1] == side)))
+                except StopIteration:
+                    pass
+            lane.version += 1
+        self._note(self._t(), f"{side}: EMPTY HAND after lift -> abort {p.obj.det.color}, home now (delay {d / HZ:.1f}s)"
+                              + (f", dropped {len(later)} queued pick(s)" if later else ""))
 
     def _is_failed(self, xy):
         return any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed)
@@ -420,6 +581,9 @@ class FastSortPolicy:
         pool = []
         for d in dets:
             xy = np.asarray(d.top[:2], float)
+            fix = min(((np.linalg.norm(xy - fxy), c) for fxy, c in self.color_fix), default=None, key=lambda t: t[0])
+            if fix is not None and fix[0] < 0.05:
+                d.color = fix[1]   # the wrist camera saw this one up close
             b = self.rules.bin_for(d.color, getattr(d, "shape", None))
             if b is None:
                 continue
@@ -590,7 +754,7 @@ class FastSortPolicy:
             ph = {name: (start_abs + s, start_abs + e) for name, s, e in plan.phases}
             ce = next((e for name, s, e in plan.phases if name == "close"), None)
             lane.plans.append(LanePlan(obj, start_abs, now + cut + d + len(A), gxy, ph,
-                                       None if ce is None else H[ce - 1].copy()))
+                                       None if ce is None else H[ce - 1].copy(), plan_a=A, plan_h=H))
             lane.version += 1
             self.attempts.append((obj.xy, side, obj.det.color, plan.target_bin == "counter"))
         finally:

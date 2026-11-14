@@ -44,6 +44,7 @@ def grip_features(perception, color, hand_q7, hand_cmd7, wrist_rgb, wrist_rgb_pr
         f["jerr_vec"] = np.round(e, 3).tolist()
     except Exception:
         f["jerr"], f["jerr_vec"] = None, None
+    f["wrist_valid"] = wrist_rgb is not None and np.asarray(wrist_rgb).size > 0 and bool(np.asarray(wrist_rgb).any())
     frac, c, m = _blob(perception, wrist_rgb, color)
     f["frac"], f["cxy"] = frac, (None if c is None else np.round(c).astype(int).tolist())
     if wrist_rgb_prev is not None:
@@ -51,6 +52,17 @@ def grip_features(perception, color, hand_q7, hand_cmd7, wrist_rgb, wrist_rgb_pr
         f["frac_prev"] = frac0
         f["shift_px"] = None if (c is None or c0 is None) else float(np.linalg.norm(c - c0))
         f["iou"] = None if (m is None or m0 is None) else float((m & m0).sum()) / float((m | m0).sum())
+    # the other colours too (colour double-check): largest blob + whether it stays put
+    f["others"] = {}
+    for oc in getattr(perception, "hue_prototypes", {}):
+        if oc == color:
+            continue
+        fr, _, mo = _blob(perception, wrist_rgb, oc)
+        iou = None
+        if wrist_rgb_prev is not None and mo is not None:
+            _, _, mo0 = _blob(perception, wrist_rgb_prev, oc)
+            iou = None if mo0 is None else float((mo & mo0).sum()) / float((mo | mo0).sum())
+        f["others"][oc] = (fr, iou)
     return f
 
 
@@ -61,4 +73,7 @@ def fmt(f):
         s += f" (earlier {100 * f['frac_prev']:.1f}%"
         s += f", shift {f['shift_px']:.0f}px" if f.get("shift_px") is not None else ""
         s += f", IoU {f['iou']:.2f})" if f.get("iou") is not None else ")"
+    for oc, (fr, iou) in (f.get("others") or {}).items():
+        if fr >= 0.01:
+            s += f"; {oc} {100 * fr:.1f}%" + (f" IoU {iou:.2f}" if iou is not None else "")
     return s
