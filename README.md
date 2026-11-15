@@ -1,5 +1,28 @@
 # Aaltonomous Humanoid — Junction 2026
 
+> ### For judges: submitted image and eval
+> - **Docker image:** `ghcr.io/mohammedzain4/fastsort:v8` (public)
+> - **Image digest:** `sha256:c41f65a5d25e3179865f6397ecb18e41fcadee6010c5e555225bdaf061a731e7`
+> - **Run:** `docker run --rm -p 8000:8000 ghcr.io/mohammedzain4/fastsort:v8` (CPU only), then evaluate against `ws://localhost:8000`
+> - **aalto eval output** (this image, sort_fixed):
+>
+> ```
+>   task / variant             sort_fixed / train
+>   trials                     1
+>   score mean ± std           +3.00 ± 0.00  (100 % of max)
+>   objects correct            3/3 (100 %)
+>   episodes all correct       1/1
+>   outcomes                   {'correct': 3}
+>   end reasons                {'done': 1}
+>   safety clips total / max   0 / 0
+>   min tick / command rate    30.0 / 29.97 Hz (sim clock)
+>   min policy real-time rate  63.0 Hz
+>   sim real-time factor       mean 0.135  min 0.135
+>   SIM GATE                   PASS
+> ```
+>
+> Full validation (new code, Isaac Sim, randomisation on): fixed rule 10/12 objects, instructions 9/13, 0 safety clips.
+
 > **Our entry: [FastSort](aaltonomous/fastsort/README.md).** A dual-arm, instruction-aware sorter: both arms
 > working at once with full-arm collision checks, free-form multilingual instructions, shape-aware grasps,
 > self-calibration from the bins, colour detection tuned on the real Drop 2 footage, and wrist-camera grip checks.
