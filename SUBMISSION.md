@@ -4,9 +4,9 @@ Deadline: **Sun 2026-11-15 10:00**. Partners judge the digital materials; peer r
 
 | Field | What we hand in | Status |
 |---|---|---|
-| Demo (digital) | Sim evaluation clips + the Docker policy server (`docker/fastsort.Dockerfile`, image `fastsort:v8`, built from commit 1508c1a; v7 = previous fallback) | v8 built; sim validation 3/3 + 4/5 so far (v7: 2/3 + 4/5) |
+| Demo (digital) | Sim evaluation clips + the Docker policy server (`docker/fastsort.Dockerfile`, image `fastsort:v8`, built from commit 1508c1a; v7 = previous fallback) | **final.** v8 image e2e 3/3; sim validation fixed 10/12, language 9/13, 0 safety clips |
 | Source code | GitHub repo (make it **public** before submitting) | private now |
-| Video (max 2 min) | Demo reel v2 (`scripts/make_demo.sh`, 38 s, `fastsort_demo_v2.mp4`) | to review together |
+| Video (max 2 min) | Demo reel v2 (`fastsort_demo_v2.mp4`) + full-screen Isaac Lab recording of a whole v8 trial (`rec_v8_full.mp4` real time, `rec_v8_x8.mp4` 8x) | to review |
 | Team info | Solo entry, filled in by hand on the platform | to do (you) |
 | Project description | The text below | draft ready |
 

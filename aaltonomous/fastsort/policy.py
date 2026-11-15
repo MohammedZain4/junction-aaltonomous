@@ -196,6 +196,7 @@ class FastSortPolicy:
         self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "act")
         self.grip_early = os.environ.get("AALTO_GRIP_EARLY", "0") == "1"   # fingers-only miss check before the lift
         self.grip_carry = os.environ.get("AALTO_GRIP_CARRY", "0") == "1"   # fingers-only drop check during the carry
+        self.easy_first = os.environ.get("AALTO_EASY_FIRST", "0") == "1"   # pick likely grabs (cubes) first
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
         self.last_look_obs_tick = -1
@@ -794,7 +795,18 @@ class FastSortPolicy:
         if not c:
             return None
         # objects far from the centre line first (keeps the arms apart while both work)
-        return max(c, key=lambda o: abs(o.xy[1]) - 0.5 * np.linalg.norm(o.xy - self.planner.drop_xy(o.bin)))
+        def score(o):
+            s = abs(o.xy[1]) - 0.5 * np.linalg.norm(o.xy - self.planner.drop_xy(o.bin))
+            if self.easy_first:  # likely grabs first, so a time-out lands on the hard ones (nothing is skipped)
+                sp = getattr(o.det, "shape_p", None) or {getattr(o.det, "shape", None) or "cylinder": 1.0}
+                s += self.easy_weight * sum(float(p) * self.grab_odds.get(k, 0.3) for k, p in sp.items())
+            return s
+        return max(c, key=score)
+
+    # single-grab success by shape, grasp_bench (DR on, perceived xy, 2026-11-14): cube ~5/9, cylinder ~1/5,
+    # triangle ~1/10. easy_weight in m of the arms-apart score: cube vs triangle = ~0.09 m
+    grab_odds = {"cube": 0.55, "cylinder": 0.25, "triangle": 0.1}
+    easy_weight = 0.2
 
     def _plan_and_commit(self, lane, obj):
         side, sl = lane.side, lane.sl
