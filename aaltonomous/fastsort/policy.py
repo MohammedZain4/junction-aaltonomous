@@ -104,6 +104,8 @@ class LanePlan:
     phases: dict = field(default_factory=dict)   # name -> (absolute start tick, absolute end tick)
     hand_closed: np.ndarray | None = None        # commanded 7 hand joints at the end of "close"
     checked: bool = False                        # grip check done
+    early_checked: bool = False                  # finger check at the end of the close done (AALTO_GRIP_EARLY)
+    carry_watch: bool = False                    # watching the fingers for a drop during the carry (AALTO_GRIP_CARRY)
     plan_a: np.ndarray | None = None             # this lane's (N, 7) arm / hand trajectory, plan tick 0 = start
     plan_h: np.ndarray | None = None
 
@@ -192,6 +194,8 @@ class FastSortPolicy:
         # act (default): abort on the head-camera cue OR the finger/wrist verdict; head: head cue only;
         # log: never act; 0: off
         self.grip_mode = os.environ.get("AALTO_GRIP_CHECK", "act")
+        self.grip_early = os.environ.get("AALTO_GRIP_EARLY", "0") == "1"   # fingers-only miss check before the lift
+        self.grip_carry = os.environ.get("AALTO_GRIP_CARRY", "0") == "1"   # fingers-only drop check during the carry
         self.pool: list[Obj] | None = None
         self.last_look_tick = -10_000
         self.last_look_obs_tick = -1
@@ -336,6 +340,8 @@ class FastSortPolicy:
             return False
 
         # ---------------- grip check at the end of each lift (log only until the thresholds are fitted)
+        if self.grip_mode == "act" and (self.grip_early or self.grip_carry) and self._finger_watch(obs, obs_tick):
+            return True
         if self.grip_mode != "0" and self._grip_check(obs, obs_tick):
             return True
 
@@ -391,6 +397,7 @@ class FastSortPolicy:
                         f["head_stale"] = True
                     head_miss = (f.get("head_table_px") or 0) >= self.grip_head_px
                     v = "miss" if head_miss else self._grip_verdict(f)
+                    p.carry_watch = self.grip_carry and v == "held"
                     self._note(self._t(), f"{side}: grip check {p.obj.det.color} "
                                           f"{getattr(p.obj.det, 'shape', None) or '?'} at {p.obj.xy.round(3)}: "
                                           f"{v.upper()}  {grip_fmt(f)}")
@@ -406,6 +413,45 @@ class FastSortPolicy:
                 except Exception as e:
                     self._note(self._t(), f"{side}: grip check failed: {e!r}")
                 did = True
+        return did
+
+    def _finger_watch(self, obs, obs_tick):
+        """Fingers-only checks (no camera lag): every tick of the observation is the real hand state.
+        early: at the end of the close, fingers that reached the closed posture closed on nothing -> abort before the
+               lift (the abort is clearance-checked; if unsafe the normal post-lift check still runs).
+        carry: after the post-lift check said HELD, fingers snapping to the closed posture mid-carry = dropped ->
+               abort the rest of the trip (home from carry height). Strict threshold: on the real hand an empty
+               grip probably never reads this low, so it fails safe (no action)."""
+        did = False
+        thr = 0.75 * self.grip_j_empty
+        hq = obs.get("hand_q")
+        if hq is None:
+            return False
+        for side, lane in self.lanes.items():
+            for p in list(lane.plans):
+                if p.hand_closed is None or "close" not in p.phases or "lift" not in p.phases:
+                    continue
+                cs, ce = p.phases["close"]
+                ls, le = p.phases["lift"]
+                j = float(np.max(np.abs(np.asarray(hq, float)[lane.sl] - np.asarray(p.hand_closed, float))))
+                if self.grip_early and not p.early_checked and obs_tick >= ce:
+                    p.early_checked = True
+                    if obs_tick <= ls + (le - ls) // 2 and j < thr:
+                        self._note(self._t(), f"{side}: EARLY grip check {p.obj.det.color}: fingers fully closed "
+                                              f"(jerr {j:.3f}) -> empty, abort before the lift")
+                        p.checked = True
+                        self._abort_pick(lane, p)
+                        did = True
+                        continue
+                if self.grip_carry and p.carry_watch and "carry" in p.phases:
+                    s0, s1 = p.phases["carry"]
+                    if s0 <= obs_tick < s1 - 5 and j < thr:
+                        p.carry_watch = False
+                        self._note(self._t(), f"{side}: DROP during carry {p.obj.det.color} (jerr {j:.3f}) -> abort")
+                        self._abort_pick(lane, p)
+                        did = True
+                    elif obs_tick >= s1:
+                        p.carry_watch = False
         return did
 
     # Grip verdict thresholds. Conservative by design: abort only when BOTH cues say empty (fingers closed fully AND
