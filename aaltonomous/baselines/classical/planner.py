@@ -381,9 +381,14 @@ class Planner:
                 cur_h = np.asarray(hand_to, float).copy()
             add(name, a, h)
 
-        def hand(name, to, hold_s):
+        def hand(name, to, hold_s, staged=False):
             nonlocal cur_h
             h = ramp(cur_h, to, hv, self.dt)
+            if staged:  # finger/thumb bases first (pull the object into the palm), then curl the tips (2, 4, 6 per side)
+                mid = np.asarray(to, float).copy()
+                tips = np.arange(sl.start, sl.stop)[[2, 4, 6]]
+                mid[tips] = cur_h[tips]
+                h = np.vstack([ramp(cur_h, mid, hv, self.dt), ramp(mid, to, hv, self.dt)])
             h = np.vstack([h, np.repeat(np.asarray(to, float)[None], int(round(hold_s / self.dt)), 0)])
             cur_h = np.asarray(to, float).copy()
             add(name, np.repeat(cur_a[None], len(h), 0), h)
@@ -398,7 +403,7 @@ class Planner:
 
         move("to_pregrasp", [q_pre], hand_to=hand_pre)
         move("descend", down)
-        hand("close", hand_cls, mo["close_hold_s"])
+        hand("close", hand_cls, mo["close_hold_s"], staged=bool(mo.get("close_staged", False)))
         move("lift", up)
         move("carry", carry + lower)
         hand("open", hand_rel, mo["open_hold_s"])  # widest posture: `open` alone left the cube wedged in the sim
