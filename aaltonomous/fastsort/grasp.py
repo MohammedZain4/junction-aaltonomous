@@ -362,8 +362,8 @@ class ShapePlanner(Planner):
     # pivots on the far base edge (centroid 15 mm from it, centre of mass ~25 mm up: tips at ~31 deg) and lands on
     # that rectangular face. The next look sees a ridge -> pinch the two triangular ends.
     push_height = 0.036       # m above the counter: grasp point of the closed hand (fist) while pushing
-    push_start = 0.085        # m from the object centre (behind the vertex) where the push starts
-    push_end = 0.0            # m past the centre where the grasp point stops (the fist front is ~3 cm ahead)
+    push_start = 0.065        # m from the object centre (behind the vertex) where the push starts
+    push_end = 0.012          # m past the centre where the grasp point stops (finger backs ~1 cm ahead of it)
     push_speed = 0.35         # fraction of the normal arm speed / acceleration for the push stroke
 
     def push_dirs(self, det, obstacles=()):
@@ -403,8 +403,10 @@ class ShapePlanner(Planner):
         try:
             for d in self.push_dirs(det, obstacles)[:2]:
                 plan = Plan(False, side=side, color=det.color, target_bin="counter")
-                self.kin.hint, self.kin.w_hint = np.r_[d, 0.0], self.axis_hint_weight   # fingers along the push
-                z = zc + self.push_height
+                # finger hint AGAINST the push: the curled finger backs (3-8 cm high) lead, the palm trails
+                # (hint along the push put the palm 9 cm ahead and scooped the prism: it slid 62 mm, no tip)
+                self.kin.hint, self.kin.w_hint = np.r_[-d, 0.0], self.axis_hint_weight
+                z = zc + float(os.environ.get("AALTO_PUSH_H", self.push_height))
                 p0, p1 = np.r_[c - d * self.push_start, z], np.r_[c + d * self.push_end, z]
                 q0, ok = self._ik(side, p0, arm_q, "push_start", plan)
                 if not ok:

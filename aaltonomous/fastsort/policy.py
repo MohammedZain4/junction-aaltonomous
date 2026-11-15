@@ -815,7 +815,7 @@ class FastSortPolicy:
     def _wants_push(self, obj):
         """Standing prism (triangle top face, directed tripod axes), confident, not pushed here before."""
         d = obj.det
-        if os.environ.get("AALTO_PUSH", "1") == "0" or obj.reloc:
+        if os.environ.get("AALTO_PUSH", "0") == "0" or obj.reloc:
             return False
         if getattr(d, "shape", None) != "triangle" or not getattr(d, "axes_directed", False):
             return False
