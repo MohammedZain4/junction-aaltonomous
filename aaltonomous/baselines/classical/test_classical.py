@@ -132,7 +132,7 @@ class TestPlanner(unittest.TestCase):
 
 
     def test_cross_body_object_is_relocated(self):
-        """Relocation fallback: the right arm puts a red (left bin) object down on the counter where the left arm has a
+        """Relocation fallback: the right arm puts a yellow (left bin) object down on the counter where the left arm has a
         full plan from home. With the published box row the left arm reaches the whole object band directly, so the
         fallback is called explicitly here."""
         from .perception import Detection
@@ -140,7 +140,7 @@ class TestPlanner(unittest.TestCase):
         post, home = hand_postures(cfg), home_arm(cfg)
         pl = Planner(cfg, SC, post, home)
         top = SC.mat_to_pelvis([0.30, 0.18, SC.object_height()])
-        det = Detection("red", top, 0, 0, "depth")
+        det = Detection("yellow", top, 0, 0, "depth")
         direct = pl.plan(det, home, post["open"])
         self.assertTrue(direct.ok, direct.reason)
         self.assertEqual((direct.side, direct.target_bin), ("left", "left"))
@@ -150,7 +150,7 @@ class TestPlanner(unittest.TestCase):
         self.assertEqual(p.safety_clips, 0)
         spot = p.waypoints["drop"]
         self.assertLess(abs(spot[2] - p.waypoints["grasp"][2]), 0.01)  # put down at grasp height, not dropped
-        fin = pl.plan(Detection("red", np.r_[spot[:2], top[2]], 0, 0, "depth"), home, post["open"], relocate=False)
+        fin = pl.plan(Detection("yellow", np.r_[spot[:2], top[2]], 0, 0, "depth"), home, post["open"], relocate=False)
         self.assertTrue(fin.ok, fin.reason)
         self.assertEqual((fin.side, fin.target_bin), ("left", "left"))
 
